@@ -4,7 +4,7 @@
 ; Adapted to CP/M and colorzied by J.B. Langston
 ; Updated to support HiTech-C Assembler on CP/M 04/03/2024 Shawn Reed
 ; Updated to use RomWBW BIOS calls to output 04/06/2024 Shawn Reed
-; Updated to skip sending color codes unless the iteration count changes to reduce overhead of sending via serial 04/06/2024 Shawn Reed
+; Updated skip sending color codes unless the iteration count changes to reduce overhead of sending via serial 04/08/2024
 ; ToDo
 ; Check for ctrl-c to stop processing
 ; Read realtime clock for calculating processing time
@@ -176,16 +176,20 @@ mandel_end:
 
 ; Send the color codes only if the iteration count has changed otherwise just print the pixel character.                
 colorpixel:
-        ld      c,b                 ; iter count in BC
+        ; first lets check to see if the iteration has changed
+        ld      a, (prevItCnt)     ; get the previous iteration count   
+        cp      b                  ; compare them (current iteration count is in B)
+        jp      z, showpixel       ; if they were the same skip the color change code 
+
+        ld      a, b
+        ld      (prevItCnt), a     ; They were different so store the new iteration count
+        
+        ld      c,b                 ; iter count in BC so swap then to little endian
         ld      b,0
         ld      hl, hsv             ; get ANSI color code table
         add     hl, bc              ; Now hl is pointing at the new color
-        
-        ld      a, (prevColor)      ; Get the previous color
-        cp      (hl)                ; Compare to the current color
-        ld      (prevColor), a      ; Store the current color for next check
+
         ld      a, (hl)             ; Put the current color into A
-        jr      z, showpixel        ; skip setting the color if they were the same
         call    setcolor
         ; Fall through to send the pixel char
 
@@ -308,7 +312,7 @@ pixel           EQU     88      ; The original block character 219
 scale           EQU     256
 divergent       EQU     scale * 4
 
-iteration_max:  DEFB    30
+iteration_max:  DEFB    31
 x:              DEFW    0 
 x_start:        DEFW    -2 * scale
 x_end:          DEFW    1 * scale
@@ -324,10 +328,17 @@ z_0_square_l:   DEFW    0
 z_1_square_h:   DEFW    0
 z_1_square_l:   DEFW    0
 
-prevColor:      DEFW    1     ; A varible to store the previous color. (1 byte)
+prevColor:      DEFB    0     ; A varible to store the previous color. (1 byte)
+iterationCnt:   DEFB    0     ; To store the iteration count
+prevItCnt:      DEFB    0        
 
-hsv:            DEFB    0                             ; hsv color table
-                DEFB    201, 200, 199, 198, 197
+
+; Color Table - 31 colors to match the iteration max of 30 plus black
+; The last will never get used since the max iteration is 30, this is an existing bug 
+; so I am using 31 for iteration max
+; Terminal code for setting the color is ESC[38;5;COLORm
+hsv:            DEFB    0                             
+                DEFB    201, 200, 199, 198, 197       
                 DEFB    196, 202, 208, 214, 220
                 DEFB    226, 190, 154, 118, 82
                 DEFB    46, 47, 48, 49, 50
