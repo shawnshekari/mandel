@@ -7,15 +7,18 @@
 ; Updated skip sending color codes unless the iteration count changes 
 ;    to reduce overhead of sending via serial 04/08/2024 Shawn Reed
 ; Updated to Check for ESC key to stop processing 04/08/2024 Shawn Reed
+; Updated to read RTC and print start and end date/time 04/10/2024 Shawn Reed
 ;
 ; ToDo
 ;
-; Read realtime clock for calculating processing time
+; Calculate processing time and display
 ; Take in command line parameters and/or read config file
 ; Produce CSV file for high res on host PC
+; Any gains in separating calculation from sending over serial?
 
-; Running the downloaded origial mandel.com from J.B. Langston on my SC722 it takes 2:20:15
-; 
+; Running the downloaded origial mandel.com from J.B. Langston on my SC722 it takes 2:20
+; Current version as of 04/10/2024 is taking 45 seconds
+
 
 ;*Include widget.asm
 
@@ -27,137 +30,6 @@
         rst     hbios
 
         jp      start
-
-
-;------------------------------------------------------------
-; Print BCD number
-; Input: B --> BCD number to print
-; Alters the value of AF
-;------------------------------------------------------------
-printBCD:
-        ld      a, b
-        and     11110000B               ; Keep the upper nibble
-        rrca
-        rrca
-        rrca
-        rrca                            ; Rotated 4 times to move it to the lower nibble
-        add     a, '0'                  ; Add the ASCII Zero
-        call    printCh
-        ld      a, b                    ; Reload the into A
-        and     0fh                     ; Keep the lower nibble this time
-        add     a, '0'                  ; Add the ACII Zero
-        call    printCh
-        ret
-
-
-; Print Date/Time
-; RTC structure address in DE
-;       Offset         Contents
-;       0              Year (00-99)
-;       1              Month (01-12)
-;       2              Date (01-31)
-;       3              Hours (00-24)
-;       4              Minutes (00-59)
-;       5              Seconds (00-59)
-printDT:
-        ld      hl, 1            ; Month index
-        add     hl, de           ; Add the index to buffer address
-        ld      b, (hl)          ; Get the value at that indexed location
-        call    printBCD
-        ld      a, '/'
-        call    printCh
-        ld      hl, 2            ; Day index
-        add     hl, de           ; Add the index to buffer address
-        ld      b, (hl)          ; Get the value at that indexed location
-        call    printBCD
-        ld      a, '/'
-        call    printCh
-        ld      hl, 0            ; Year index amount
-        add     hl, de           ; 
-        ld      b, (hl)          ; Get the value at that indexed location
-        call    printBCD
-        ld      a, ' '
-        call    printCh
-        ld      hl, 3            ; Hour index
-        add     hl, de           ; Add the index to buffer address
-        ld      b, (hl)          ; Get the value at that indexed location
-        call    printBCD
-        ld      a, ':'
-        call    printCh
-        ld      hl, 4            ; Min index
-        add     hl, de           ; Add the index to buffer address
-        ld      b, (hl)          ; Get the value at that indexed location
-        call    printBCD
-        ld      a, ':'
-        call    printCh
-        ld      hl, 5            ; Sec index
-        add     hl, de           ; Add the index to buffer address
-        ld      b, (hl)          ; Get the value at that indexed location
-        call    printBCD
-        ld      a, cr
-        call    printCh
-        ld      a, lf
-        call    printCh
-        ret
-
-; Print Character
-; Utilizing the RomWBW HBIOS calls to output the character in the A register
-printCh:
-        ; Save the registers
-        push    bc
-        push    de
-        push    hl
-
-        ld      b, hbios_cioout         ; RomWBW HBIOS Charater Output
-        ld      c, hbios_device         ; The current console output device
-        ld      e, a                    ; The character to output is in A
-        rst     hbios                   ; Call the HBIOS routine note this can also be a CALL 0FFh
-
-        ; Restore the registers
-        pop    hl
-        pop    de
-        pop    bc
-        ret
-
-; Print String
-; The string is expected to be NULL (ASCII 0) terminated
-; HL will contain the pointer to the string address
-printSt:
-        ld      a, (hl)                 ; Get the character at the address HL is pointing to 
-        or      a                       ; Is it the NULL terminating character? (ASCII 0)
-        ret     z                       ; If so we are done
-        call    printCh                 ; Still here, well then lets print it
-        inc     hl                      ; Increment the pointer to the next character
-        jr      printSt                 ; Loop and do it again
-
-; Monitor for an ESC key to abort calculation and end the application
-charIn:
-        ; Save the registers
-        push    bc
-        push    de
-        push    hl
-
-        ; Check the status of the input buffer since the read is blocking
-        ld      b, hbios_cioist         ; Input status command
-        ld      c, hbios_device         ; Console device
-        rst     hbios                   ; Call the HBIOS routine
-        cp      0                       ; Update the zero flag
-        jp      z, charInEnd            ; nothing in the input buffer so return to the iteration loop
-
-        ld      b, hbios_cioin          ; The input read HBIOS routine
-        ld      c, hbios_device         ; Console Device
-        rst     hbios                   ; Call the HBIOS Routine
-        ld      a, 27                   ; Check for an ESC
-        cp      e                       ; Char read in is in E so compare to the ESC in A
-        jp      nz, charInEnd           ; If the zero flag is not set we can throw away the char and resume the iteration loop
-        jp      mandel_end              ; We had gotten an ESC so we are done
-        
-charInEnd:
-        ; Restore the registers
-        pop     hl
-        pop     de
-        pop     bc
-        jp      inner_loop2             ; back to work
 
 ; Program Start
 start:
@@ -465,6 +337,134 @@ l_pos_hl:    ; prepare unsigned dehl = de x hl
     inc         de
     ret
 
+;------------------------------------------------------------
+; Print BCD number
+; Input: B --> BCD number to print
+; Alters the value of AF
+;------------------------------------------------------------
+printBCD:
+        ld      a, b
+        and     11110000B               ; Keep the upper nibble
+        rrca
+        rrca
+        rrca
+        rrca                            ; Rotated 4 times to move it to the lower nibble
+        add     a, '0'                  ; Add the ASCII Zero
+        call    printCh
+        ld      a, b                    ; Reload the into A
+        and     0fh                     ; Keep the lower nibble this time
+        add     a, '0'                  ; Add the ACII Zero
+        call    printCh
+        ret
+
+; Print Date/Time
+; RTC structure address in DE
+;       Offset         Contents
+;       0              Year (00-99)
+;       1              Month (01-12)
+;       2              Date (01-31)
+;       3              Hours (00-24)
+;       4              Minutes (00-59)
+;       5              Seconds (00-59)
+printDT:
+        ld      hl, 1            ; Month index
+        add     hl, de           ; Add the index to buffer address
+        ld      b, (hl)          ; Get the value at that indexed location
+        call    printBCD
+        ld      a, '/'
+        call    printCh
+        ld      hl, 2            ; Day index
+        add     hl, de           ; Add the index to buffer address
+        ld      b, (hl)          ; Get the value at that indexed location
+        call    printBCD
+        ld      a, '/'
+        call    printCh
+        ld      hl, 0            ; Year index amount
+        add     hl, de           ; 
+        ld      b, (hl)          ; Get the value at that indexed location
+        call    printBCD
+        ld      a, ' '
+        call    printCh
+        ld      hl, 3            ; Hour index
+        add     hl, de           ; Add the index to buffer address
+        ld      b, (hl)          ; Get the value at that indexed location
+        call    printBCD
+        ld      a, ':'
+        call    printCh
+        ld      hl, 4            ; Min index
+        add     hl, de           ; Add the index to buffer address
+        ld      b, (hl)          ; Get the value at that indexed location
+        call    printBCD
+        ld      a, ':'
+        call    printCh
+        ld      hl, 5            ; Sec index
+        add     hl, de           ; Add the index to buffer address
+        ld      b, (hl)          ; Get the value at that indexed location
+        call    printBCD
+        ld      a, cr
+        call    printCh
+        ld      a, lf
+        call    printCh
+        ret
+
+; Print Character
+; Utilizing the RomWBW HBIOS calls to output the character in the A register
+printCh:
+        ; Save the registers
+        push    bc
+        push    de
+        push    hl
+
+        ld      b, hbios_cioout         ; RomWBW HBIOS Charater Output
+        ld      c, hbios_device         ; The current console output device
+        ld      e, a                    ; The character to output is in A
+        rst     hbios                   ; Call the HBIOS routine note this can also be a CALL 0FFh
+
+        ; Restore the registers
+        pop    hl
+        pop    de
+        pop    bc
+        ret
+
+; Print String
+; The string is expected to be NULL (ASCII 0) terminated
+; HL will contain the pointer to the string address
+printSt:
+        ld      a, (hl)                 ; Get the character at the address HL is pointing to 
+        or      a                       ; Is it the NULL terminating character? (ASCII 0)
+        ret     z                       ; If so we are done
+        call    printCh                 ; Still here, well then lets print it
+        inc     hl                      ; Increment the pointer to the next character
+        jr      printSt                 ; Loop and do it again
+
+; Monitor for an ESC key to abort calculation and end the application
+charIn:
+        ; Save the registers
+        push    bc
+        push    de
+        push    hl
+
+        ; Check the status of the input buffer since the read is blocking
+        ld      b, hbios_cioist         ; Input status command
+        ld      c, hbios_device         ; Console device
+        rst     hbios                   ; Call the HBIOS routine
+        cp      0                       ; Update the zero flag
+        jp      z, charInEnd            ; nothing in the input buffer so return to the iteration loop
+
+        ld      b, hbios_cioin          ; The input read HBIOS routine
+        ld      c, hbios_device         ; Console Device
+        rst     hbios                   ; Call the HBIOS Routine
+        ld      a, 27                   ; Check for an ESC
+        cp      e                       ; Char read in is in E so compare to the ESC in A
+        jp      nz, charInEnd           ; If the zero flag is not set we can throw away the char and resume the iteration loop
+        jp      mandel_end              ; We had gotten an ESC so we are done
+        
+charInEnd:
+        ; Restore the registers
+        pop     hl
+        pop     de
+        pop     bc
+        jp      inner_loop2             ; back to work
 
 hbios           EQU     08      ; HBIOS call
 hbios_cioin     EQU     00h     ; HBIOS Function 0x00 – Character Input (CIOIN)
@@ -502,6 +502,7 @@ prevItCnt:      DEFB    0     ; To store the previous iteration count
 
 startDT:         DEFS    6     ; Reserve buffer for RTC start date time
 endDT:           DEFS    6     ; Reserve buffer for the end date time
+bufferDT:        DEFS    6     ; Buffer to calculate run time
 
 ; Color Table - 31 colors to match the iteration max of 30 plus black
 ; The last will never get used since the max iteration is 30, this is an existing bug 
