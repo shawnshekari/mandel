@@ -4,17 +4,101 @@
 ; Adapted to CP/M and colorzied by J.B. Langston
 ; Updated to support HiTech-C Assembler on CP/M 04/03/2024 Shawn Reed
 ; Updated to use RomWBW BIOS calls to output 04/06/2024 Shawn Reed
-; Updated skip sending color codes unless the iteration count changes to reduce overhead of sending via serial 04/08/2024
+; Updated skip sending color codes unless the iteration count changes 
+;    to reduce overhead of sending via serial 04/08/2024 Shawn Reed
+; Updated to Check for ESC key to stop processing 04/08/2024 Shawn Reed
+;
 ; ToDo
-; Check for ctrl-c to stop processing
+;
 ; Read realtime clock for calculating processing time
-; Take in command line parameters
+; Take in command line parameters and/or read config file
 ; Produce CSV file for high res on host PC
+
+; Running the downloaded origial mandel.com from J.B. Langston on my SC722 it takes 2:20:15
+; 
 
 ;*Include widget.asm
 
         ORG     100h
+
+        ; get the current date/time
+        ld      b, hbios_rtcgetime
+        ld      hl, startDT
+        rst     hbios
+
         jp      start
+
+
+;------------------------------------------------------------
+; Print BCD number
+; Input: B --> BCD number to print
+; Alters the value of AF
+;------------------------------------------------------------
+printBCD:
+        ld      a, b
+        and     11110000B               ; Keep the upper nibble
+        rrca
+        rrca
+        rrca
+        rrca                            ; Rotated 4 times to move it to the lower nibble
+        add     a, '0'                  ; Add the ASCII Zero
+        call    printCh
+        ld      a, b                    ; Reload the into A
+        and     0fh                     ; Keep the lower nibble this time
+        add     a, '0'                  ; Add the ACII Zero
+        call    printCh
+        ret
+
+
+; Print Date/Time
+; RTC structure address in DE
+;       Offset         Contents
+;       0              Year (00-99)
+;       1              Month (01-12)
+;       2              Date (01-31)
+;       3              Hours (00-24)
+;       4              Minutes (00-59)
+;       5              Seconds (00-59)
+printDT:
+        ld      hl, 1            ; Month index
+        add     hl, de           ; Add the index to buffer address
+        ld      b, (hl)          ; Get the value at that indexed location
+        call    printBCD
+        ld      a, '/'
+        call    printCh
+        ld      hl, 2            ; Day index
+        add     hl, de           ; Add the index to buffer address
+        ld      b, (hl)          ; Get the value at that indexed location
+        call    printBCD
+        ld      a, '/'
+        call    printCh
+        ld      hl, 0            ; Year index amount
+        add     hl, de           ; 
+        ld      b, (hl)          ; Get the value at that indexed location
+        call    printBCD
+        ld      a, ' '
+        call    printCh
+        ld      hl, 3            ; Hour index
+        add     hl, de           ; Add the index to buffer address
+        ld      b, (hl)          ; Get the value at that indexed location
+        call    printBCD
+        ld      a, ':'
+        call    printCh
+        ld      hl, 4            ; Min index
+        add     hl, de           ; Add the index to buffer address
+        ld      b, (hl)          ; Get the value at that indexed location
+        call    printBCD
+        ld      a, ':'
+        call    printCh
+        ld      hl, 5            ; Sec index
+        add     hl, de           ; Add the index to buffer address
+        ld      b, (hl)          ; Get the value at that indexed location
+        call    printBCD
+        ld      a, cr
+        call    printCh
+        ld      a, lf
+        call    printCh
+        ret
 
 ; Print Character
 ; Utilizing the RomWBW HBIOS calls to output the character in the A register
@@ -46,13 +130,43 @@ printSt:
         inc     hl                      ; Increment the pointer to the next character
         jr      printSt                 ; Loop and do it again
 
+; Monitor for an ESC key to abort calculation and end the application
+charIn:
+        ; Save the registers
+        push    bc
+        push    de
+        push    hl
+
+        ; Check the status of the input buffer since the read is blocking
+        ld      b, hbios_cioist         ; Input status command
+        ld      c, hbios_device         ; Console device
+        rst     hbios                   ; Call the HBIOS routine
+        cp      0                       ; Update the zero flag
+        jp      z, charInEnd            ; nothing in the input buffer so return to the iteration loop
+
+        ld      b, hbios_cioin          ; The input read HBIOS routine
+        ld      c, hbios_device         ; Console Device
+        rst     hbios                   ; Call the HBIOS Routine
+        ld      a, 27                   ; Check for an ESC
+        cp      e                       ; Char read in is in E so compare to the ESC in A
+        jp      nz, charInEnd           ; If the zero flag is not set we can throw away the char and resume the iteration loop
+        jp      mandel_end              ; We had gotten an ESC so we are done
+        
+charInEnd:
+        ; Restore the registers
+        pop     hl
+        pop     de
+        pop     bc
+        jp      inner_loop2             ; back to work
 
 ; Program Start
 start:
         ld      hl, cls                 ; Terminal code to clear the screen
         call    printSt
         ld      hl, welcome             ; Welcome message
-        call    printSt                 
+        call    printSt
+        ld      de, startDT
+        call    printDT                 
 
 outer_loop:     
         ld      hl, (y_end)
@@ -64,6 +178,8 @@ outer_loop:
         ld      hl, (x_start)
         ld      (x), hl
 inner_loop:     
+        jp      charIn
+inner_loop2:
         ld      hl, (x_end)
         ld      de, (x)
         and     a
@@ -78,77 +194,76 @@ inner_loop:
         ld      b, a
 iteration_loop: 
         push    bc
-        ld      de, (z_1)
-        ld      b, d
-        ld	c, e
-        call    mul_16
-        ld      (z_0_square_l), hl
-        ld      (z_0_square_h), de
 
-        ld      de, (z_0)
-        ld      b, d
-        ld	c, e
-        call    mul_16
-        ld      (z_1_square_l), hl
-        ld      (z_1_square_h), de
-
-        and     a
-        ld      bc, (z_0_square_l)
-        sbc     hl, bc
-        ld      (scratch_0), hl
-        ld      h, d
-        ld	l, e
-        ld      bc, (z_0_square_h)
-        sbc     hl, bc
-        ld      bc, (scratch_0)
-
-        ld      c, b
-        ld      b, l
-        push    bc
-
-        ld      hl, (z_0)
-        add     hl, hl
+        ld      hl, (z_1)               ; Compute DE HL = z_1 * z_1
         ld      d, h
-        ld	e, l
-        ld      bc, (z_1)
-        call    mul_16
+        ld      e, l
+        call    l_muls_32_16x16
+        ld      (z_1_square_low), hl    ; z_1 ** 2 is needed later again
+        ld      (z_1_square_high), de
 
-        ld      b, e
-        ld      c, h
+        ld      hl, (z_0)               ; Compute DE HL = z_0 * z_0
+        ld      d, h
+        ld      e, l
+        call    l_muls_32_16x16
+        ld      (z_0_square_low), hl    ; z_1 ** 2 will be also needed
+        ld      (z_0_square_high), de
+        
+        and     a                       ; Compute subtraction
+        ld      bc, (z_1_square_low)
+        sbc     hl, bc
+        push    hl                      ; Save lower 16 bit of result
+        ld      h, d
+        ld      l, e
+        ld      bc, (z_1_square_high)
+        sbc     hl, bc
+        pop     bc                      ; HL BC = z_0 ^ 2 - z_1 ^ 2
+
+        ld      c, b                    ; Divide by scale = 256
+        ld      b, l                    ; Discard the rest
+        push    bc                      ; We need BC later
+
+        ld      hl, (z_0)               ; Compute DE HL = 2 * z_0 * z_1
+        add     hl, hl
+        ld      de, (z_1)
+        call    l_muls_32_16x16
+
+        ld      b, e                    ; Divide by scale (= 256)
+        ld      c, h                    ; BC contains now z_3
 
         ld      hl, (y)
         add     hl, bc
         ld      (z_1), hl
 
-        pop     bc
+        pop     bc                      ; Here BC is needed again :-)
         ld      hl, (x)
         add     hl, bc
         ld      (z_0), hl
 
-        ld      hl, (z_0_square_l)
-        ld      de, (z_1_square_l)
+        ld      hl, (z_0_square_low)    ; Use the squares computed
+        ld      de, (z_1_square_low)    ; above
         add     hl, de
-        ld      b, h
-        ld	c, l
+        ld      b, h                    ; BC contains lower word of sum
+        ld      c, l
 
-        ld      hl, (z_0_square_h)
-        ld      de, (z_1_square_h)
+        ld      hl, (z_0_square_high)
+        ld      de, (z_1_square_high)
         adc     hl, de
 
-        ld      h, l
-        ld      l, b
-
-        ld      bc, divergent
+        ld      h, l                    ; HL now contains (z_0 ^ 2 -
+        ld      l, b                    ; z_1 ^ 2) / scale
+        
+        ld      bc,(divergent)
         and     a
         sbc     hl, bc
 
-        jp      c, iteration_dec
-        pop     bc
-        jr      iteration_end
+        jr      C, iteration_dec        ; No break
+        pop     bc                      ; Get latest iteration counter
+        jr      iteration_end           ; Exit loop
 
 iteration_dec:  
-        pop     bc
-        djnz    iteration_loop
+        pop     bc                      ; Get iteration counter
+        djnz    iteration_loop          ; We might fall through!
 iteration_end:
         call    colorpixel
 
@@ -170,9 +285,18 @@ inner_loop_end:
         jp      outer_loop
 
 mandel_end:
+        ; get the current date/time
+        ld      b, hbios_rtcgetime
+        ld      hl, endDT
+        rst     hbios
+
+        ld      hl, crlfeos
+        call    printSt
         ld      hl, finished
         call    printSt
-        ret
+        ld      de, endDT
+        call    printDT
+        rst     0
 
 ; Send the color codes only if the iteration count has changed otherwise just print the pixel character.                
 colorpixel:
@@ -210,25 +334,25 @@ setcolor:
         ret
         
 printdec:
-        ld      c,-100
+        ld      c,-100          ; print 100s place
         call    pd1
-        ld      c,-10
+        ld      c,-10           ; print 10s place
         call    pd1
-        ld      c,-1
+        ld      c,-1            ; print 1s place
 pd1:
-        ld      e,'0'-1
+        ld      e,'0'-1         ; start ASCII right before 0
 pd2:
-        inc     e
-        add     a,c
-        jr      c,pd2
-        sub     c
-        push    af
-        ld      a,-1
+        inc     e               ; increment ASCII code
+        add     a,c             ; subtract 1 place value
+        jr      C,pd2           ; loop until negative
+        sub     c               ; add back the last value
+        push    af              ; save accumulator
+        ld      a,-1            ; are we in the ones place?
         cp      c
-        jr      z,pd3
-        ld      a,'0'
+        jr      Z,pd3           ; if so, skip to output
+        ld      a,'0'           ; don't print leading 0s
         cp      e
-        jr      z,pd4
+        jr      Z,pd4
 pd3:
         ld      a, e
         call    printCh
@@ -237,101 +361,147 @@ pd4:
         pop     af
         ret
 
+   ; signed multiplication of two 16-bit numbers into a 32-bit product.
+   ; using the z180 hardware unsigned 8x8 multiply instruction
+   ;
+   ; enter : de = 16-bit multiplicand = y
+   ;         hl = 16-bit multiplier = x
+   ;
+   ; exit  : dehl = 32-bit product
+   ;         carry reset
+   ;
+   ; uses  : af, bc, de, hl
 
-;
-;   Compute DEHL = BC * DE (signed): This routine is not too clever but it
-; works. It is based on a standard 16-by-16 multiplication routine for unsigned
-; integers. At the beginning the sign of the result is determined based on the
-; signs of the operands which are negated if necessary. Then the unsigned
-; multiplication takes place, followed by negating the result if necessary.
-;
-mul_16:
-        xor     a
-        bit     7, b
-        jr      z, bc_positive
-        sub     c
-        ld      c, a
-        ld      a, 0
-        sbc     a, b
-        ld      b, a
-        scf
-bc_positive:
-        bit     7, D
-        jr      z, de_positive
-        push    af
-        xor     a
-        sub     e
-        ld      e, a
-        ld      a, 0
-        sbc     a, d
-        ld      d, a
-        pop     af
-        ccf
-de_positive:
-        push    af
-        and     a
-        sbc     hl, hl
-        ld      a, 16
-mul_16_loop:
-        add     hl, hl
-        rl      e
-        rl      d
-        jr      nc, mul_16_exit
-        add     hl, bc
-        jr      nc, mul_16_exit
-        inc     de
-mul_16_exit:
-        dec     a
-        jr      nz, mul_16_loop
-        pop     af
-        ret     nc
-        xor     a
-        sub     l
-        ld      l, a
-        ld      a, 0
-        sbc     a, h
-        ld      h, a
-        ld      a, 0
-        sbc     a, e
-        ld      e, a
-        ld      a, 0
-        sbc     a, d
-        ld      d, a
-        ret
+l_muls_32_16x16:
+   ld           b,d             ; d = MSB of multiplicand
+   ld           c,h             ; h = MSB of multiplier
+   push         bc              ; save sign info
+
+   bit          7,d
+   jr           z,l_pos_de      ; take absolute value of multiplicand
+
+   ld           a,e
+   cpl 
+   ld           e,a
+   ld           a,d
+   cpl
+   ld           d,a
+   inc          de
+
+l_pos_de:
+   bit          7,h
+   jr           z,l_pos_hl      ; take absolute value of multiplier
+
+   ld           a,l
+   cpl
+   ld           l,a
+   ld           a,h
+   cpl
+   ld           h,a
+   inc          hl
+
+l_pos_hl:    ; prepare unsigned dehl = de x hl
+
+    ; unsigned multiplication of two 16-bit numbers into a 32-bit product
+    ;
+    ; enter : de = 16-bit multiplicand = y
+    ;         hl = 16-bit multiplicand = x
+    ;
+    ; exit  : dehl = 32-bit product
+    ;         carry reset
+    ;
+    ; uses  : af, bc, de, hl
+
+    ld          b,l             ; xl
+    ld          c,d             ; yh
+    ld          d,l             ; xl
+    ld          l,c
+    push        hl              ; xh yh
+    ld          l,e             ; yl
+
+    mlt         de              ; xl * yl
+
+    mlt         bc              ; xl * yh
+    mlt         hl              ; xh * yl
+
+    add         hl,bc           ; sum cross products
+
+    sbc         a,a
+    and         01h
+    ld          b,a             ; carry from cross products
+    ld          c,h             ; LSB of MSW from cross products
+
+    ld          a,d
+    add         a,l
+    ld          d,a             ; de = final product LSW
+
+    pop         hl
+    mlt         hl              ; xh * yh
+
+    adc         hl,bc           ; hl = final product MSW
+    ex          de,hl
+
+    pop         bc              ; recover sign info from multiplicand and multiplier
+    ld          a,b
+    xor         c
+    ret         P               ; return if positive product
+
+    ld          a,l             ; negate product and return
+    cpl
+    ld          l,a
+    ld          a,h
+    cpl
+    ld          h,a
+    ld          a,e
+    cpl
+    ld          e,a
+    ld          a,d
+    cpl
+    ld          d,a
+    inc         l
+    ret         NZ
+    inc         h
+    ret         NZ
+    inc         de
+    ret
+
 
 hbios           EQU     08      ; HBIOS call
-hbios_cioin     EQU     00h     ; HBIOS Character inout command
-hbios_cioout    EQU     01h     ; HBIOS Character output command
+hbios_cioin     EQU     00h     ; HBIOS Function 0x00 – Character Input (CIOIN)
+hbios_cioout    EQU     01h     ; HBIOS Function 0x01 – Character Output (CIOOUT)
+hbios_cioist    EQU     02h     ; HBIOS Function 0x02 – Character Input Status (CIOIST)
+hbios_rtcgetime EQU     20h     ; HBIOS Function 0x20 – RTC Get Time (RTCGETTIM)
 hbios_device    EQU     80h     ; HBIOS the current output device/port 
 hbios_EOS       EQU     00h     ; End of String (ASCII 0)
 sqBracket       EQU     5bh     ; ANSCII "[" (91 decimal/0x5B)
 cr		EQU	13
 lf		EQU	10
 esc             EQU     27
-pixel           EQU     88      ; The original block character 219
+pixel           EQU     35      ; The original block character 219 I like using  35 as it is a #
 scale           EQU     256
 divergent       EQU     scale * 4
 
-iteration_max:  DEFB    31
+iteration_max:  DEFB    31              ; Default 30
 x:              DEFW    0 
-x_start:        DEFW    -2 * scale
-x_end:          DEFW    1 * scale
-x_step:         DEFW    scale / 40
-y:              DEFW    -5 * scale / 4
-y_end:          DEFW    0 * scale / 4
-y_step:         DEFW    scale / 30
+x_start:        DEFW    -2 * scale      ; Default -2
+x_end:          DEFW    1 * scale       ; Default 1
+x_step:         DEFW    scale / 80     ; Default 80
+y:              DEFW    -5 * scale / 4  ; Default -5
+y_end:          DEFW    5 * scale / 4   ; Default 5
+y_step:         DEFW    scale / 60     ; Default 60
 z_0:            DEFW    0
 z_1:            DEFW    0
 scratch_0:      DEFW    0
-z_0_square_h:   DEFW    0
-z_0_square_l:   DEFW    0
-z_1_square_h:   DEFW    0
-z_1_square_l:   DEFW    0
+z_0_square_high: DEFW    0
+z_0_square_low:  DEFW    0
+z_1_square_high: DEFW    0
+z_1_square_low:  DEFW    0
 
-prevColor:      DEFB    0     ; A varible to store the previous color. (1 byte)
-iterationCnt:   DEFB    0     ; To store the iteration count
-prevItCnt:      DEFB    0        
+prevItCnt:      DEFB    0     ; To store the previous iteration count   
 
+
+startDT:         DEFS    6     ; Reserve buffer for RTC start date time
+endDT:           DEFS    6     ; Reserve buffer for the end date time
 
 ; Color Table - 31 colors to match the iteration max of 30 plus black
 ; The last will never get used since the max iteration is 30, this is an existing bug 
@@ -343,7 +513,25 @@ hsv:            DEFB    0
                 DEFB    226, 190, 154, 118, 82
                 DEFB    46, 47, 48, 49, 50
                 DEFB    51, 45, 39, 33, 27
-                DEFB    21, 57, 93, 129, 165
+                DEFB    165, 129, 93, 57, 21
+
+; Grayscale to blue
+;hsv:            DEFB    18                             
+;                DEFB    255, 255, 254, 254, 253       
+;                DEFB    253, 252, 252, 251, 251
+;                DEFB    250, 250, 249, 249, 248
+;                DEFB    248, 247, 247, 246, 245
+;                DEFB    244, 243, 242, 241, 240
+;                DEFB    239, 236, 234, 232, 0
+
+; Bands blue green to white
+;hsv:            DEFB    7                             
+;                DEFB    16, 17, 18, 19, 20       
+;                DEFB    25, 26, 27, 31, 32       
+;                DEFB    33, 37, 38, 39, 45       
+;                DEFB    16, 17, 18, 19, 20       
+;                DEFB    25, 26, 27, 31, 32       
+;                DEFB    33, 37, 38, 39, 45       
 
 
 welcome:        DEFM    'Generating a Mandelbrot set'
