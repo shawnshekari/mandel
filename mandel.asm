@@ -686,7 +686,7 @@ elapsedMins:    DEFB    0
 ;                DEFB    25, 26, 27, 31, 32       
 ;                DEFB    33, 37, 38, 39, 45    
 
-hsv:            DEFB    256
+hsv:            DEFB    0
                 DEFB    159, 117, 87, 87, 81
                 DEFB    81, 51, 51, 45, 45
                 DEFB    44, 44, 33, 33, 32
