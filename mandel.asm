@@ -16,10 +16,21 @@
 ; Produce CSV file for high res on host PC
 ; Any gains in separating calculation from sending over serial?
 
-; Running the downloaded origial mandel.com from J.B. Langston on my SC722 it takes 2:20
-; Current version as of 04/10/2024 is taking 45 seconds
-; With not char out it takes 39 seconds
+; Running the downloaded origial mandel.com from J.B. Langston on my SC722 it takes 2:20 @ 18.4MHz
+; Current version as of 04/10/2024 is taking 45 seconds @ 18.4MHz
+; With not char out it takes 39 seconds @ 18.4MHz
+; With not char out it takes 25 seconds @ 36.8MHz 1 mem WS
 
+
+; Hi-Tech Z80 C Compiler (CP/M-80) V3.09-17
+; Copyright (C) 1984-87 HI-TECH SOFTWARE
+; Updated from https://github.com/agn453/HI-TECH-Z80-C
+;
+; Assemble to MANDEL.OBJ with "ZAS MANDEL.ASM"
+; Link to MANDEL.COM with "LINQ -Z -N -C100H -DMANDEL.SYM -OMANDEL.COM MANDEL.OBJ"
+
+; Test system is a SC722(CPU), SC721(MEM), SC727(RTC), SC712(PWR), SC702(Backplane)
+; https://smallcomputercentral.com/sc792-modular-z180-computer/
 
 ;*Include widget.asm
 
@@ -627,10 +638,10 @@ iteration_max:  DEFB    30              ; Default 30
 x:              DEFW    0 
 x_start:        DEFW    -2 * scale      ; Default -2
 x_end:          DEFW    1 * scale       ; Default 1
-x_step:         DEFW    scale / 80      ; Default 80
+x_step:         DEFW    scale / 40      ; Default 80
 y:              DEFW    -5 * scale / 4  ; Default -5
 y_end:          DEFW    5 * scale / 4   ; Default 5
-y_step:         DEFW    scale / 60      ; Default 60
+y_step:         DEFW    scale / 20      ; Default 60
 z_0:            DEFW    0
 z_1:            DEFW    0
 scratch_0:      DEFW    0
@@ -649,13 +660,13 @@ elapsedMins:    DEFB    0
 
 ; Color Table - 31 colors to match the iteration max of 30 plus black
 ; Terminal code for setting the color is ESC[38;5;COLORm
-hsv:            DEFB    0                             
-                DEFB    201, 200, 199, 198, 197       
-                DEFB    196, 202, 208, 214, 220
-                DEFB    226, 190, 154, 118, 82
-                DEFB    46, 47, 48, 49, 50
-                DEFB    51, 45, 39, 33, 27
-                DEFB    165, 129, 93, 57, 21
+;hsv:            DEFB    0                             
+;                DEFB    201, 200, 199, 198, 197       
+;                DEFB    196, 202, 208, 214, 220
+;                DEFB    226, 190, 154, 118, 82
+;                DEFB    46, 47, 48, 49, 50
+;                DEFB    51, 45, 39, 33, 27
+;                DEFB    165, 129, 93, 57, 21
 
 ; Grayscale to blue
 ;hsv:            DEFB    18                             
@@ -673,7 +684,16 @@ hsv:            DEFB    0
 ;                DEFB    33, 37, 38, 39, 45       
 ;                DEFB    16, 17, 18, 19, 20       
 ;                DEFB    25, 26, 27, 31, 32       
-;                DEFB    33, 37, 38, 39, 45       
+;                DEFB    33, 37, 38, 39, 45    
+
+hsv:            DEFB    256
+                DEFB    159, 117, 87, 87, 81
+                DEFB    81, 51, 51, 45, 45
+                DEFB    44, 44, 33, 33, 32
+                DEFB    32, 27, 27, 26, 26
+                DEFB    25, 25, 21, 20, 20
+                DEFB    19, 19, 18, 18, 18
+
 
 
 welcome:        DEFM    'Generating a Mandelbrot set'
