@@ -8,16 +8,17 @@
 ;    to reduce overhead of sending via serial 04/08/2024 Shawn Reed
 ; Updated to Check for ESC key to stop processing 04/08/2024 Shawn Reed
 ; Updated to read RTC and print start and end date/time 04/10/2024 Shawn Reed
+; Updated to Calculate processing time and display 04/12/2024 Shawn Reed
 ;
 ; ToDo
 ;
-; Calculate processing time and display
 ; Take in command line parameters and/or read config file
 ; Produce CSV file for high res on host PC
 ; Any gains in separating calculation from sending over serial?
 
 ; Running the downloaded origial mandel.com from J.B. Langston on my SC722 it takes 2:20
 ; Current version as of 04/10/2024 is taking 45 seconds
+; With not char out it takes 39 seconds
 
 
 ;*Include widget.asm
@@ -168,6 +169,12 @@ mandel_end:
         call    printSt
         ld      de, endDT
         call    printDT
+        ld      hl, elapsedSt
+        call    printSt
+
+        call    calcRuntime
+
+
         rst     0
 
 ; Send the color codes only if the iteration count has changed otherwise just print the pixel character.                
@@ -409,22 +416,55 @@ printDT:
 
 ; Print Character
 ; Utilizing the RomWBW HBIOS calls to output the character in the A register
+; The slower CPM BDOS are just commented out for future testing or as needed
+;
 printCh:
         ; Save the registers
         push    bc
         push    de
         push    hl
 
+        ld      e, a                    ; The character to output is in A
+        
         ld      b, hbios_cioout         ; RomWBW HBIOS Charater Output
         ld      c, hbios_device         ; The current console output device
-        ld      e, a                    ; The character to output is in A
         rst     hbios                   ; Call the HBIOS routine note this can also be a CALL 0FFh
+
+        ;ld      c, conout              ; CP/M BDOS version 
+        ;call	bdos                    ; Quite a bit slower than the HBIOS call
 
         ; Restore the registers
         pop    hl
         pop    de
         pop    bc
         ret
+
+
+; BCD to binary conversion
+; Purpose: Convert one byte of BCD data to one byte of binary data
+; Entry: Register A BCD data
+; Exit: Register A = Binary data
+; Registers used: A,B,C,F (bc will be preserved)
+; Time: 60 cycles
+BCD2Bin:
+        push    bc
+                                ; MULTIPLY UPPER NIBBLE BY 10 AND SAVE IT
+                                ; UPPER NIBBLE * 10 = UPPER NIBBLE * (8 + 2)
+        ld      b, a            ; SAVE ORIGINAL BCD VALUE IN B
+        AND     0fh             ; MASK OFF UPPER NIBBLE
+        RRCA                    ; SHIFT RIGHT 1 BIT
+        LD      C, A            ; C = UPPER NIBBLE * 8
+        RRCA                    ; SHIFT RIGHT 2 MORE TiMES
+        RRCA                    ; A = UPPER NIBBLE * 2
+        ADD     A, C
+        LD      C, A            ; C = UF'PER NIBBLE * (8+2)
+                                ; GET LOWER NIBBLE AND ADD IT TO THE
+                                ; BINARY EQUIVALENT OF THE UPPER NIBBLE
+        LD      A, B            ; GET ORIGINAL VALUE BACK
+        AND     0fh             ; MASK OFF UPPER NIBBLE
+        ADD     A, C            ; ADD TO( BINARY UPPER NIBBLE
+        pop     bc
+        RET 
 
 ; Print String
 ; The string is expected to be NULL (ASCII 0) terminated
@@ -466,6 +506,108 @@ charInEnd:
         pop     bc
         jp      inner_loop2             ; back to work
 
+;------------------------------------------------------------------------------------------------------------------------------
+; Calculate the run time based on the start and end date/time buffers
+;
+; going to assume that we are only talking minuets right now
+; hl, de, bc, a are used
+; The start and end date/time buffers are assumed to already be populated and will be overwriten in this process 
+
+calcRuntime:
+                                ; Is the end seconds larger than the start seconds?
+        ld      hl, endDT       
+        inc     hl              ; offset to month
+        inc     hl              ; offset to day
+        inc     hl              ; offset to hours
+        inc     hl              ; offset to min
+        inc     hl              ; offset to sec
+        ld      a, (hl)         ; A now has the ending seconds in BCD
+        push    hl
+
+        ld      hl, startDT     ; Address of the start date/time buffer
+        inc     hl              ; offset to month
+        inc     hl              ; offset to day
+        inc     hl              ; offset to hours
+        inc     hl              ; offset to min
+        inc     hl              ; offset to sec
+        cp      (hl)            ; Compare setting the carry flag if the start seconds is larger
+        ld      b, (hl)         ; Store the start seconds in B for later
+        pop      hl             ; Restore HL to the pointer to the end seconds buffer
+        jp      c, startSecBigger
+                                ; if we fell through then we can just subtract to get the seconds elapsed
+        sub     b               ; Subtract the start seconds in B from the end seconds in A
+        daa                     ; adjusts the Accumulator for BCD addition and subtraction 
+        ld      (elapsedSecs), a
+        jp      calculateMin
+        
+startSecBigger:                 ; The start seconds was larger than end so we need to subtract a min and add 60 secs
+        add     a, 60h          ; 60 BCD / 01100000b / 96d 
+        daa                     ; adjusts the Accumulator for BCD addition and subtraction
+        sub     b               ; now subtract the start seconds
+        daa                     ; adjusts the Accumulator for BCD addition and subtraction
+        ld      (elapsedSecs), a
+                                ; We have the seconds calculated so now we need to deduct 1 from the min
+        dec     hl              ; Decrement HL so that it points to the end min
+        ld      a, (hl)         ; Get the end sec
+        dec     a               ; Subtract 1 min since we stole 60 seconds
+        daa                     ; adjusts the Accumulator for BCD addition and subtraction
+        ld      (hl), a         ; store the min back into the end min buffer
+
+calculateMin:
+                                ; Is the end min larger than the start min?
+        ld      hl, endDT       
+        inc     hl              ; offset to month
+        inc     hl              ; offset to day
+        inc     hl              ; offset to hours
+        inc     hl              ; offset to min
+        ld      a, (hl)         ; A now has the ending min in BCD
+        push    hl
+
+        ld      hl, startDT     ; Address of the start date/time buffer
+        inc     hl              ; offset to month
+        inc     hl              ; offset to day
+        inc     hl              ; offset to hours
+        inc     hl              ; offset to min
+        cp      (hl)            ; Compare setting the carry flag if the start min is larger
+        ld      b, (hl)         ; Store the start min in B for later
+        pop      hl             ; Restore HL to the pointer to the end min buffer
+        jp      c, startMinBigger
+                                ; if we fell through then we can just subtract to get the minuets elapsed
+        sub     b               ; Subtract the start min in B from the end min in A
+        daa                     ; adjusts the Accumulator for BCD addition and subtraction 
+        ld      (elapsedMins), a
+        jp      calculateHours
+        
+startMinBigger:                 ; The start min was larger than end so we need to subtract an hour and add 60 min
+        add     a, 60h          ; 60 BCD / 01100000b / 96d 
+        daa                     ; adjusts the Accumulator for BCD addition and subtraction
+        sub     b               ; now subtract the start min
+        daa                     ; adjusts the Accumulator for BCD addition and subtraction
+        ld      (elapsedMins), a
+                                ; We have the min calculated so now we need to deduct 1 from the hours
+        dec     hl              ; Decrement HL so that it points to the end hours
+        ld      a, (hl)         ; Get the end hours
+        dec     a               ; Subtract 1 min since we stole 60 min
+        daa                     ; adjusts the Accumulator for BCD addition and subtraction
+        ld      (hl), a         ; store the hours back into the end min buffer
+
+calculateHours:
+        ; ToDo
+
+        ld      a, (elapsedMins)
+        ld      b, a
+        call    printBCD        ; Print out the minuets
+
+        ld      a, ':'
+        call    printCh
+        ld      a, (elapsedSecs)
+        ld      b, a
+        call    printBCD        ; Print out the seconds
+
+        ret
+
+bdos		equ	05h     ; BDOS vector
+conout		equ	2       ; BDOS console output call
 hbios           EQU     08      ; HBIOS call
 hbios_cioin     EQU     00h     ; HBIOS Function 0x00 – Character Input (CIOIN)
 hbios_cioout    EQU     01h     ; HBIOS Function 0x01 – Character Output (CIOOUT)
@@ -481,14 +623,14 @@ pixel           EQU     35      ; The original block character 219 I like using 
 scale           EQU     256
 divergent       EQU     scale * 4
 
-iteration_max:  DEFB    31              ; Default 30
+iteration_max:  DEFB    30              ; Default 30
 x:              DEFW    0 
 x_start:        DEFW    -2 * scale      ; Default -2
 x_end:          DEFW    1 * scale       ; Default 1
-x_step:         DEFW    scale / 80     ; Default 80
+x_step:         DEFW    scale / 80      ; Default 80
 y:              DEFW    -5 * scale / 4  ; Default -5
 y_end:          DEFW    5 * scale / 4   ; Default 5
-y_step:         DEFW    scale / 60     ; Default 60
+y_step:         DEFW    scale / 60      ; Default 60
 z_0:            DEFW    0
 z_1:            DEFW    0
 scratch_0:      DEFW    0
@@ -500,13 +642,12 @@ z_1_square_low:  DEFW    0
 prevItCnt:      DEFB    0     ; To store the previous iteration count   
 
 
-startDT:         DEFS    6     ; Reserve buffer for RTC start date time
-endDT:           DEFS    6     ; Reserve buffer for the end date time
-bufferDT:        DEFS    6     ; Buffer to calculate run time
+startDT:        DEFS    6     ; Reserve buffer for RTC start date time BCD
+endDT:          DEFS    6     ; Reserve buffer for the end date time BCD
+elapsedSecs:    DEFB    0
+elapsedMins:    DEFB    0
 
 ; Color Table - 31 colors to match the iteration max of 30 plus black
-; The last will never get used since the max iteration is 30, this is an existing bug 
-; so I am using 31 for iteration max
 ; Terminal code for setting the color is ESC[38;5;COLORm
 hsv:            DEFB    0                             
                 DEFB    201, 200, 199, 198, 197       
@@ -541,6 +682,9 @@ welcome:        DEFM    'Generating a Mandelbrot set'
 finished:       DEFB    esc, sqBracket, 48, 109                       ; Reset the color "esc[0m"
                 DEFM    'Computations completed'        
                 DEFB    cr, lf, hbios_EOS
+
+elapsedSt:      DEFM    'Time taken: '
+                DEFB    hbios_EOS
 
 crlfeos:        DEFB    cr, lf, hbios_EOS                              ; Carrage return, line feed, end of string
 ansifg:         DEFB    esc, sqBracket, 51, 56, 59, 53, 59, hbios_EOS  ; Foreground "esc[38;5;"
