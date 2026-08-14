@@ -23,10 +23,41 @@ numbers and commit history for full detail on each):
 
 **Not yet decided:** what to tackle next. Precision reduction (drop
 `scale` from 256, shrinking the multiply routine itself) is the main
-candidate left on the table from the original optimization list. The
-user also floated changing the printed *character* (not just the color)
-per-pixel so the fractal shape stays legible without VT100 color
-support - a separate, orthogonal visual-output change, not yet started.
+candidate left on the table from the original optimization list.
+
+### Done: per-pixel character now varies with iteration count (visual, not perf)
+
+Colors are still the primary "for enjoyment" output and were left
+completely untouched. Added a `chartable` (same 31-entry shape/indexing
+as `hsv`) so `showpixel` prints a character that varies with iteration
+count on *every* pixel - `'0'`-`'9'` then `'A'`-`'U'` for indices 0-30,
+decodable at a glance. Point was output *comparison*: a stripped-ANSI/
+plain-text capture (e.g. what you get pasting terminal output somewhere
+without color support) now still shows the fractal's shape and lets two
+runs be diffed meaningfully, where before every pixel was just `#` and
+all the information was in color codes alone.
+
+Implementation note: `showpixel` is entered two ways (direct jump when
+color is unchanged from the previous pixel, or fall-through after
+`colorpixel` sends a new color) - naively reading register `b` for the
+iteration count would be wrong on the fall-through path, since
+`colorpixel` clobbers `b` to 0 while building the `hsv` table index.
+Reads `(prevItCnt)` instead, which by construction is already correct on
+both paths (colorpixel just wrote the current count there, or it already
+equalled the current count for the jump to have happened at all).
+
+**Verified correct** via a self-consistency check on the captured
+output (immune to the manual-retyping noise documented below): every
+character maps to exactly one color throughout a full run, the pixel
+count matches the known-good baseline exactly (6966), and the character-
+to-color mapping matches `chartable`/`hsv`'s shared indexing exactly,
+including the legitimate duplicate colors (e.g. both `3` and `4` map to
+color 87, matching `hsv`'s own `87, 87` entries at those indices).
+
+**Measured: 43.61s, three consecutive runs** - no measurable timing
+impact versus the 43.61-43.62s baseline. The added lookup (a 16-bit add
+and indexed read) only runs once per pixel print, not once per
+iteration, so it doesn't touch the hot inner loop at all.
 
 ### Tried and reverted: magnitude pre-check before the multiply (negative result)
 

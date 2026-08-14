@@ -250,7 +250,18 @@ colorpixel:
         ; Fall through to send the pixel char
 
 showpixel:
-        ld      a, pixel            ; show pixel
+        ld      a, (prevItCnt)      ; iteration count for THIS pixel - safe to
+                                     ; read here on both entry paths (jp z here
+                                     ; means b already equalled prevItCnt; the
+                                     ; fall-through path just stored the new b
+                                     ; into prevItCnt above) - can't use b
+                                     ; directly, colorpixel clobbers it to 0
+                                     ; while building the hsv index
+        ld      c, a                ; character varies with iteration count on
+        ld      b, 0                ; every pixel (unlike color, which is only
+        ld      hl, chartable       ; re-sent when it changes) so a plain-text
+        add     hl, bc              ; capture with ANSI stripped stays legible
+        ld      a, (hl)             ; and diffable without a color terminal
         call    printCh
         ret
 
@@ -816,7 +827,6 @@ sqBracket       EQU     5bh     ; ANSCII "[" (91 decimal/0x5B)
 cr		EQU	13
 lf		EQU	10
 esc             EQU     27
-pixel           EQU     35      ; The original block character 219 I like using  35 as it is a #
 scale           EQU     256
 divergent       EQU     scale * 4
 
@@ -882,6 +892,22 @@ hsv:            DEFB    0
                 DEFB    32, 27, 27, 26, 26
                 DEFB    25, 25, 21, 20, 20
                 DEFB    19, 19, 18, 18, 18
+
+; Character table - same shape/indexing as hsv above (index = iteration
+; count at bailout: 0 = reached iteration_max without diverging, 1..30 =
+; diverged with that many iterations left), but printed on EVERY pixel
+; regardless of whether the color changed. Colors are for the fractal
+; image; these are so a stripped-ANSI/plain-text capture of the output
+; stays legible and diffable without a color-capable terminal - each
+; char maps 1:1 to an iteration count, decodable at a glance ('0'-'9'
+; then 'A'-'U' for 10-30).
+chartable:      DEFB    '0'
+                DEFB    '1','2','3','4','5'
+                DEFB    '6','7','8','9','A'
+                DEFB    'B','C','D','E','F'
+                DEFB    'G','H','I','J','K'
+                DEFB    'L','M','N','O','P'
+                DEFB    'Q','R','S','T','U'
 
 
 
