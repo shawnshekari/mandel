@@ -50,6 +50,31 @@ measured), `rc2014_upload`/`rc2014_download` (XMODEM file transfer),
   twice. The steps are CPU-bound, not disk-bound. Do it for SD wear, not
   speed.
 
+## Uploading source: zip it first
+
+Measured, real win: zip the source on host before `rc2014_upload`, then
+`UNZIP` it on-device, instead of uploading the raw `.asm` directly.
+`mandel_z80.asm` (32381 bytes, 253 XMODEM blocks) took 53.30s raw vs
+26.83s zipped (7810 bytes, 62 blocks, ~76% smaller) + 9.4s to unzip on
+device = 36.23s total - **~32% faster end-to-end**, verified
+byte-identical after extraction. XMODEM transfer time is apparently
+dominated by per-block overhead, not raw bytes, so shrinking the block
+count wins even after paying for decompression.
+```
+zip -j out.zip mandel_z80.asm          # on host, before rc2014_upload
+UNZIP <name>       # no .ZIP, no option: check-only, CRCs of all files
+UNZIP <name> /E    # extract - MUST be /E (leading slash); bare E is
+                    # parsed as an archive-filename filter instead and
+                    # silently matches nothing
+```
+8.3 filename truncation applies to the extracted name (`mandel_z80.asm` ->
+`MANDEL_Z.ASM`) - account for that when scripting this.
+
+`UNZIP.COM` itself (`UNZIPZ 0.4-1 - SC`, pulled from the RomWBW repo) is
+currently untracked in this repo pending a licensing/provenance decision -
+check it's still present before relying on this workflow in a fresh
+checkout.
+
 ## Build commands
 
 ```

@@ -76,19 +76,31 @@ intact afterward. Committed.
 
 ## Backlog
 
-- ~~Test `UNZIP.COM`~~ **Done, closed.** `UNZIP.COM` (`UNZIPZ 0.4-1 - SC`,
-  from the RomWBW repo, sitting untracked in this repo pending a
-  licensing decision - same provenance caution as the gitignored HI-TECH
-  reference files) works correctly, but **only supports the `Stored`
-  (uncompressed) method** - a `Deflate`-compressed zip was silently
-  skipped; a `zip -0` (stored) archive extracted byte-identical. That
-  kills the compression-for-transfer-speed idea via this tool: a stored
-  zip of `mandel_z80.asm` is 32559 bytes vs 32381 raw - *larger*, not
-  smaller, from container overhead with zero compression. Would need a
-  Deflate-capable (or older Shrink/Reduce/Implode-capable) unzip to make
-  this idea work at all, and producing those older formats isn't a quick
-  `zip` flag with modern tools. Not pursuing further unless a different
-  tool turns up.
+- ~~Test `UNZIP.COM` / source compression~~ **Done, validated, real win.**
+  `UNZIP.COM` (`UNZIPZ 0.4-1 - SC`, from the RomWBW repo, sitting
+  untracked in this repo pending a licensing decision - same provenance
+  caution as the gitignored HI-TECH reference files) supports Deflate
+  correctly. First attempt looked like it didn't (silently skipped a
+  Deflate-compressed test file) - that was a syntax bug on my end (bare
+  `E` instead of `/E`), not a real tool limitation; corrected syntax
+  extracted a Deflate archive byte-identical. Re-tested with the actual
+  source and measured the full real-world cycle:
+  - Raw upload of `mandel_z80.asm` (32381 bytes, 253 XMODEM blocks):
+    **53.30s**
+  - `zip`-compressed upload (7810 bytes, 62 blocks, 76% smaller) + on-
+    device `UNZIP ... /E`: **26.83s + 9.4s = 36.23s**
+  - **~32% faster end-to-end, verified byte-identical** (sha256 of the
+    unzipped file matched the raw upload exactly)
+
+  Worth adopting for the main edit/build iteration loop: zip the source
+  on host, upload the zip, `UNZIP <name> /E` on-device, then proceed as
+  normal. Syntax notes for next time: `UNZIP <name>` (no `.ZIP`, no
+  option) checks CRCs only; `UNZIP <name> /E` extracts (option must be
+  `/E` with the leading slash - a bare `E` gets parsed as part of the
+  archive-filename-filter field instead and silently matches nothing).
+  8.3 filename truncation applies to the extracted name (`mandel_z80.asm`
+  extracted as `MANDEL_Z.ASM`) - account for that in any scripted
+  workflow.
 - **[workflow] Multi-file transfer bundling** - separate idea surfaced
   while closing the item above: even without compression, bundling
   several files into one zip could still cut down the *number* of XMODEM
