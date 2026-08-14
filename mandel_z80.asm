@@ -85,8 +85,24 @@ inner_loop2:
 
         ld      a, (iteration_max)
         ld      b, a
-iteration_loop: 
+iteration_loop:
         push    bc
+
+        ld      hl, (z_0)               ; Compute DE HL = z_0 * z_0 first -
+        ld      d, h                    ; check it alone before doing any
+        ld      e, l                    ; more work: z_1^2 >= 0 always, so
+        call    l_muls_32_16x16         ; if z_0^2 alone already diverges,
+        ld      (z_0_square_low), hl    ; the sum will too - skip z_1^2 and
+        ld      (z_0_square_high), de   ; the cross product entirely
+
+        ld      l, h                    ; reposition (z_0^2)/scale into hl
+        ld      h, e                    ; (same divide-by-256 trick as below)
+        ld      bc, divergent
+        and     a
+        sbc     hl, bc
+        jp      NC, bailout             ; z_0^2 alone already >= divergent -
+                                         ; jp not jr, bailout is >127 bytes
+                                         ; away here
 
         ld      hl, (z_1)               ; Compute DE HL = z_1 * z_1
         ld      d, h
@@ -95,19 +111,34 @@ iteration_loop:
         ld      (z_1_square_low), hl    ; z_1 ** 2 is needed later again
         ld      (z_1_square_high), de
 
-        ld      hl, (z_0)               ; Compute DE HL = z_0 * z_0
-        ld      d, h
-        ld      e, l
-        call    l_muls_32_16x16
-        ld      (z_0_square_low), hl    ; z_1 ** 2 will be also needed
-        ld      (z_0_square_high), de
-        
-        and     a                       ; Compute subtraction
+        ld      hl, (z_0_square_low)    ; Combined check: (z_0^2+z_1^2)/scale
+        ld      de, (z_1_square_low)    ; >= divergent? If so, this is the
+        add     hl, de                  ; last iteration for this pixel -
+        ld      b, h                    ; skip the cross product too, it's
+        ld      c, l                    ; only needed for the NEXT
+                                         ; iteration's z_1
+        ld      hl, (z_0_square_high)
+        ld      de, (z_1_square_high)
+        adc     hl, de
+
+        ld      h, l                    ; HL now contains (z_0 ^ 2 +
+        ld      l, b                    ; z_1 ^ 2) / scale
+
+        ld      bc, divergent           ; immediate value, not (divergent) -
+                                         ; that was dereferencing memory address
+                                         ; 0x0400, which lands inside the hsv
+                                         ; color table by coincidence
+        and     a
+        sbc     hl, bc
+        jp      NC, bailout             ; jp not jr, out of jr's +-127 range
+
+        ; Still converging - compute z_0^2 - z_1^2 and 2*z_0*z_1, then update
+        ld      hl, (z_0_square_low)    ; Compute subtraction
+        and     a
         ld      bc, (z_1_square_low)
         sbc     hl, bc
         push    hl                      ; Save lower 16 bit of result
-        ld      h, d
-        ld      l, e
+        ld      hl, (z_0_square_high)
         ld      bc, (z_1_square_high)
         sbc     hl, bc
         pop     bc                      ; HL BC = z_0 ^ 2 - z_1 ^ 2
@@ -133,32 +164,12 @@ iteration_loop:
         add     hl, bc
         ld      (z_0), hl
 
-        ld      hl, (z_0_square_low)    ; Use the squares computed
-        ld      de, (z_1_square_low)    ; above
-        add     hl, de
-        ld      b, h                    ; BC contains lower word of sum
-        ld      c, l
-
-        ld      hl, (z_0_square_high)
-        ld      de, (z_1_square_high)
-        adc     hl, de
-
-        ld      h, l                    ; HL now contains (z_0 ^ 2 -
-        ld      l, b                    ; z_1 ^ 2) / scale
-        
-        ld      bc,divergent            ; immediate value, not (divergent) -
-                                         ; that was dereferencing memory address
-                                         ; 0x0400, which lands inside the hsv
-                                         ; color table by coincidence
-        and     a
-        sbc     hl, bc
-
-        pop     bc                      ; Get iteration counter (both paths need it)
-        jr      C, iteration_dec        ; No break
-        jr      iteration_end           ; Exit loop
-
-iteration_dec:
+        pop     bc                      ; Get iteration counter
         djnz    iteration_loop          ; We might fall through!
+        jr      iteration_end
+
+bailout:
+        pop     bc                      ; Get iteration counter (unchanged)
 iteration_end:
         COND    OUTPUT
         call    colorpixel
