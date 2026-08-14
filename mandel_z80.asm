@@ -1,34 +1,15 @@
 *Title  Compute a Mandelbrot set on a simple Z80 computer.
 ;
-; From https://rosettacode.org/wiki/Mandelbrot_set#Z80_Assembly
-; Adapted to CP/M and colorzied by J.B. Langston
-; Updated to support HiTech-C Assembler on CP/M 04/03/2024 Shawn Reed
-; Updated to use RomWBW BIOS calls to output 04/06/2024 Shawn Reed
-; Updated skip sending color codes unless the iteration count changes 
-;    to reduce overhead of sending via serial 04/08/2024 Shawn Reed
-; Updated to Check for ESC key to stop processing 04/08/2024 Shawn Reed
-; Updated to read RTC and print start and end date/time 04/10/2024 Shawn Reed
-; Updated to Calculate processing time and display 04/12/2024 Shawn Reed
-; Ported from Z180 to plain Z80: replaced the MLT-based l_muls_32_16x16
-;    with a pure Z80 shift-and-add 16x16->32 multiply (no MLT on Z80).
-;    RST 8 HBIOS calls are unchanged - they are portable across every
-;    RomWBW target, Z80 or Z180. 08/10/2026
+; Plain-Z80 fork of mandel_z180.asm - see README.md for full history and
+; measured timings on each board. No hardware multiply on plain Z80, so
+; l_muls_32_16x16 is a software shift-add multiply instead of the Z180's
+; MLT-based one.
 ;
 ; ToDo
 ;
 ; Take in command line parameters and/or read config file
 ; Produce CSV file for high res on host PC
 ; Any gains in separating calculation from sending over serial?
-
-; Running the downloaded origial mandel.com from J.B. Langston on my SC722 it takes 2:20 @ 18.4MHz
-; Current version as of 04/10/2024 is taking 45 seconds @ 18.4MHz
-; With not char out it takes 39 seconds @ 18.4MHz
-; With not char out it takes 25 seconds @ 36.8MHz 1 mem WS
-;
-; Z80 port has no hardware multiply, so l_muls_32_16x16 is a software
-; shift-add multiply instead - expect this build to run meaningfully
-; slower per-pixel than the Z180 original at the same clock speed.
-
 
 ; Hi-Tech Z80 C Compiler (CP/M-80) V3.09-17
 ; Copyright (C) 1984-87 HI-TECH SOFTWARE

@@ -13,6 +13,49 @@ This repo tracks two diverging versions of the program:
 
 Both assemble/link on-device with `ZAS`/`LINQ` (see `MAKE.SUB`).
 
+## History
+
+- Adapted to CP/M and colorized by J.B. Langston, from the original at
+  https://rosettacode.org/wiki/Mandelbrot_set#Z80_Assembly
+- 04/03/2024 - Updated to support HiTech-C assembler on CP/M
+- 04/06/2024 - Updated to use RomWBW HBIOS calls to output
+- 04/08/2024 - Skip sending color codes unless the iteration count changes,
+  to reduce serial overhead
+- 04/08/2024 - Check for ESC key to stop processing
+- 04/10/2024 - Read RTC and print start/end date/time
+- 04/12/2024 - Calculate and display processing time
+- 08/10/2026 - Ported `mandel_z80.asm` from Z180 to plain Z80: replaced the
+  MLT-based `l_muls_32_16x16` with a pure Z80 shift-and-add 16x16->32
+  multiply (no `MLT` instruction on plain Z80). `RST 8` HBIOS calls are
+  unchanged - portable across every RomWBW target, Z80 or Z180.
+
+## Timings
+
+Two different boards, so two separate sets of numbers - don't compare them
+directly against each other.
+
+### `mandel_z180.asm` - SC722 Z180 board (see file header for hardware detail)
+
+- Original downloaded `mandel.com` from J.B. Langston: 2:20 @ 18.4MHz
+- As of 04/10/2024: 45 seconds @ 18.4MHz
+- With no char output: 39 seconds @ 18.4MHz
+- With no char output: 25 seconds @ 36.8MHz, 1 mem wait state
+
+### `mandel_z80.asm` - RC2014 Pro (RCZ80_std), Z80 @ 7.372MHz, RomWBW/ZSDOS
+
+Measured on real hardware via the rc2014bridge MCP (`rc2014_run_command`,
+wall-clock send-to-prompt-return timing). The Z80 port has no hardware
+multiply, so `l_muls_32_16x16` is a software shift-add multiply instead -
+expect this to run meaningfully slower per-pixel than the Z180 original at
+a comparable clock speed.
+
+| Build | Time | Notes |
+|---|---|---|
+| Baseline (unrolled multiply, before hand optimization) | 45.09-45.13s | Two runs |
+| Baseline, `OUTPUT=0` (compute only, no serial output) | 41.82s | Serial I/O is only ~7% of runtime here - compute dominates |
+| + clear-carry-before-bit-test in `l_muls_32_16x16` | 44.36s | ~1.7% faster; see commit history for detail |
+| + hoist duplicate `pop bc` out of the exit branch | 44.38s | Within measurement noise (~0.07s expected, below wall-clock resolution here) |
+
 # Mandelbrot Set Generator for Z80 (CP/M) - Optimization Readme
 
 This document outlines potential optimizations for the Mandelbrot set generator written in Z80 assembly for CP/M, targeting RomWBW and the Z180 CPU. The optimizations are listed in order of their *likely* impact on rendering speed, from highest to lowest.  However, the actual impact may vary depending on the specific hardware and configuration.  **Thorough testing and measurement are crucial after implementing each optimization.**
