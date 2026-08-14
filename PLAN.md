@@ -76,16 +76,27 @@ intact afterward. Committed.
 
 ## Backlog
 
-- **Test `UNZIP.COM`** (user pulled this from the RomWBW repo, dropped
-  into this repo) - see if it's viable for the source-compression idea
-  below.
-- **[workflow] Compress source before upload?** XMODEM transfer of the
-  ~31KB source is likely dominated by per-block protocol overhead
-  (240+ blocks), possibly comparable to the ~21s assemble time itself.
-  Assembly source compresses well. Now have `UNZIP.COM` to test as the
-  device-side decompressor - measure actual upload time first to confirm
-  it's worth building the compress-on-host / upload-zip / unzip-on-device
-  pipeline.
+- ~~Test `UNZIP.COM`~~ **Done, closed.** `UNZIP.COM` (`UNZIPZ 0.4-1 - SC`,
+  from the RomWBW repo, sitting untracked in this repo pending a
+  licensing decision - same provenance caution as the gitignored HI-TECH
+  reference files) works correctly, but **only supports the `Stored`
+  (uncompressed) method** - a `Deflate`-compressed zip was silently
+  skipped; a `zip -0` (stored) archive extracted byte-identical. That
+  kills the compression-for-transfer-speed idea via this tool: a stored
+  zip of `mandel_z80.asm` is 32559 bytes vs 32381 raw - *larger*, not
+  smaller, from container overhead with zero compression. Would need a
+  Deflate-capable (or older Shrink/Reduce/Implode-capable) unzip to make
+  this idea work at all, and producing those older formats isn't a quick
+  `zip` flag with modern tools. Not pursuing further unless a different
+  tool turns up.
+- **[workflow] Multi-file transfer bundling** - separate idea surfaced
+  while closing the item above: even without compression, bundling
+  several files into one zip could still cut down the *number* of XMODEM
+  sessions when transferring multiple files at once (each has its own
+  ~15s fixed setup overhead, measured earlier via `rc2014_calibrate_
+  pacing`). Not relevant to the current single-file source workflow, but
+  worth remembering if a future task needs to push several files over at
+  once.
 - **Binary compare across all available assemblers** - once the current
   source is stable, build with real ZAS (device), pasmo, and z80asm and
   diff the output. Possible finding given what we now know: pasmo/z80asm
