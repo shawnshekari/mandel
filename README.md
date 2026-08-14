@@ -55,6 +55,7 @@ a comparable clock speed.
 | Baseline, `OUTPUT=0` (compute only, no serial output) | 41.82s | Serial I/O is only ~7% of runtime here - compute dominates |
 | + clear-carry-before-bit-test in `l_muls_32_16x16` | 44.36s | ~1.7% faster; see commit history for detail |
 | + hoist duplicate `pop bc` out of the exit branch | 44.38s | Within measurement noise (~0.07s expected, below wall-clock resolution here) |
+| + early bailout (check `z_0^2` alone, then combined, before the cross product) | 43.61s | ~3.3-3.7% below original baseline overall; see commit history for why the gain is smaller than the multiply-count reduction alone suggests |
 
 # Mandelbrot Set Generator for Z80 (CP/M) - Optimization Readme
 
