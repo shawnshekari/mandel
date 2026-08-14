@@ -34,9 +34,12 @@ measured), `rc2014_upload`/`rc2014_download` (XMODEM file transfer),
   once via `rc2014_download`) - if either ever goes missing from `H:`
   (has happened - see Gotchas below), restore from there with
   `rc2014_upload`.
-- **`J:`** - SD-backed, persistent. Where the "real" `MANDEL.ASM`/`.OBJ`/
-  `.COM`/`.SYM` live between sessions. Upload here when a result is worth
-  keeping.
+- **`J:`** - SD-backed, persistent. Where the "real" `MANDEL.ASM` lives
+  between sessions. Upload here (zipped, per below) when a result is worth
+  keeping. **Just the source** - don't bother round-tripping `.OBJ`/`.COM`/
+  `.SYM` through the host, they're one `ZAS`+`LINQ` away from `J:MANDEL.ASM`
+  whenever they're actually needed, and keeping them in sync on every
+  change is pure overhead.
 - **`B:`** - RAM disk (`MD0:0`), 344KB, volatile (cleared on power cycle
   only, not between commands). Use for iteration scratch work - assemble/
   link/test here to keep the SD card write-free during rapid iteration.

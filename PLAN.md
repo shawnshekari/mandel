@@ -59,6 +59,35 @@ impact versus the 43.61-43.62s baseline. The added lookup (a 16-bit add
 and indexed read) only runs once per pixel print, not once per
 iteration, so it doesn't touch the hot inner loop at all.
 
+### Done: redesigned the color palette to a symmetric black->white->black mountain
+
+User asked for a black -> dark blue -> light blue -> white progression
+across the 31 `hsv` entries, with resolution concentrated where escape
+counts change fastest (to highlight subtle boundary detail) rather than
+spread evenly. First attempt was one-directional: black at index 0
+(interior), climbing through navy/blue/cyan to white at index 30 (the
+fastest-escaping, farthest-away points). Wrong call - index 30's
+neighborhood turned out to be the huge, uninteresting far-field
+background covering most of the image, so the render came out mostly
+stark white instead of the atmospheric dark look the original palette
+had. User caught this from a screenshot and asked for a symmetric
+version instead.
+
+**Final design**: black at *both* ends (index 0 = interior that never
+diverges, index 30 = far-field points that diverge instantly - both
+uninteresting), climbing navy -> blue -> cyan -> white and back down
+again, peaking at white around index 15 (the boundary-detail band, where
+escape counts are most varied pixel-to-pixel). Built by walking the
+6x6x6 xterm-256 color cube's edge path (black -> pure blue -> pure cyan
+-> white) and mirroring it around the midpoint; density still weighted
+toward both black ends (the finest available navy steps sit right next
+to black on either side). Confirmed on real hardware: 43.7s, no
+measurable timing change (pure data-table swap, same lookup cost
+regardless of what values are in the table).
+
+Old one-directional attempt is left commented out above the active table
+in `mandel_z80.asm`, same convention as the other retired palettes there.
+
 ### Tried and reverted: magnitude pre-check before the multiply (negative result)
 
 Idea: before each of the two `l_muls_32_16x16` calls in `iteration_loop`,

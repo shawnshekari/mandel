@@ -877,21 +877,51 @@ elapsedMins:    DEFB    0
 ;                DEFB    239, 236, 234, 232, 0
 
 ; Bands blue green to white
-;hsv:            DEFB    7                             
-;                DEFB    16, 17, 18, 19, 20       
-;                DEFB    25, 26, 27, 31, 32       
-;                DEFB    33, 37, 38, 39, 45       
-;                DEFB    16, 17, 18, 19, 20       
-;                DEFB    25, 26, 27, 31, 32       
-;                DEFB    33, 37, 38, 39, 45    
+;hsv:            DEFB    7
+;                DEFB    16, 17, 18, 19, 20
+;                DEFB    25, 26, 27, 31, 32
+;                DEFB    33, 37, 38, 39, 45
+;                DEFB    16, 17, 18, 19, 20
+;                DEFB    25, 26, 27, 31, 32
+;                DEFB    33, 37, 38, 39, 45
 
+; Bright near-black, dark far-out (original hand-tuned palette)
+;hsv:            DEFB    0
+;                DEFB    159, 117, 87, 87, 81
+;                DEFB    81, 51, 51, 45, 45
+;                DEFB    44, 44, 33, 33, 32
+;                DEFB    32, 27, 27, 26, 26
+;                DEFB    25, 25, 21, 20, 20
+;                DEFB    19, 19, 18, 18, 18
+
+; One-directional black -> navy -> blue -> cyan -> white (tried, rejected):
+; put white on indices 27-30, which turned out to be the fast-escaping
+; FAR-FIELD background covering most of the image - made the bulk of the
+; render a stark white field instead of the atmospheric dark one.
+;hsv:            DEFB    0
+;                DEFB    16, 17, 17, 18, 19
+;                DEFB    20, 20, 21, 27, 27
+;                DEFB    33, 33, 33, 39, 39
+;                DEFB    45, 45, 45, 51, 51
+;                DEFB    87, 87, 123, 123, 159
+;                DEFB    159, 195, 195, 231, 231
+
+; Symmetric "mountain": black at both ends (index 0 = interior that never
+; diverges, index 30 = far-field points that diverge instantly - both
+; visually uninteresting), climbing navy -> blue -> cyan -> white and back
+; down again, peaking at white around index 15. Puts the brightest color
+; on the boundary-detail band in the middle of the escape-count range
+; instead of on the huge, uninteresting far-field background. Density is
+; still weighted toward both black ends (fine navy steps right next to
+; black on either side) since that's where escape counts change fastest
+; pixel-to-pixel.
 hsv:            DEFB    0
-                DEFB    159, 117, 87, 87, 81
-                DEFB    81, 51, 51, 45, 45
-                DEFB    44, 44, 33, 33, 32
-                DEFB    32, 27, 27, 26, 26
-                DEFB    25, 25, 21, 20, 20
-                DEFB    19, 19, 18, 18, 18
+                DEFB    17, 18, 19, 20, 21
+                DEFB    27, 33, 39, 39, 45
+                DEFB    51, 87, 123, 195, 231
+                DEFB    195, 123, 87, 51, 45
+                DEFB    39, 39, 33, 27, 21
+                DEFB    20, 19, 18, 17, 0
 
 ; Character table - same shape/indexing as hsv above (index = iteration
 ; count at bailout: 0 = reached iteration_max without diverging, 1..30 =
