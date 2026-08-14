@@ -364,193 +364,161 @@ l_pos_hl:    ; prepare unsigned dehl = de x hl
     ; unrolled 16x - the multiply is the hottest routine in this program
     ; (called 3x per Mandelbrot iteration), so the dec/jr nz loop-control
     ; overhead was worth trading for code size here
+    or         a
     bit         0,e             ; bit 1 of 16
     jr         z,l_mul1_noadd
     add         hl,bc
-    jr         l_mul1_shift
 l_mul1_noadd:
-    or         a
-l_mul1_shift:
     rr         h
     rr         l
     rr         d
     rr         e
 
+    or         a
     bit         0,e             ; bit 2 of 16
     jr         z,l_mul2_noadd
     add         hl,bc
-    jr         l_mul2_shift
 l_mul2_noadd:
-    or         a
-l_mul2_shift:
     rr         h
     rr         l
     rr         d
     rr         e
 
+    or         a
     bit         0,e             ; bit 3 of 16
     jr         z,l_mul3_noadd
     add         hl,bc
-    jr         l_mul3_shift
 l_mul3_noadd:
-    or         a
-l_mul3_shift:
     rr         h
     rr         l
     rr         d
     rr         e
 
+    or         a
     bit         0,e             ; bit 4 of 16
     jr         z,l_mul4_noadd
     add         hl,bc
-    jr         l_mul4_shift
 l_mul4_noadd:
-    or         a
-l_mul4_shift:
     rr         h
     rr         l
     rr         d
     rr         e
 
+    or         a
     bit         0,e             ; bit 5 of 16
     jr         z,l_mul5_noadd
     add         hl,bc
-    jr         l_mul5_shift
 l_mul5_noadd:
-    or         a
-l_mul5_shift:
     rr         h
     rr         l
     rr         d
     rr         e
 
+    or         a
     bit         0,e             ; bit 6 of 16
     jr         z,l_mul6_noadd
     add         hl,bc
-    jr         l_mul6_shift
 l_mul6_noadd:
-    or         a
-l_mul6_shift:
     rr         h
     rr         l
     rr         d
     rr         e
 
+    or         a
     bit         0,e             ; bit 7 of 16
     jr         z,l_mul7_noadd
     add         hl,bc
-    jr         l_mul7_shift
 l_mul7_noadd:
-    or         a
-l_mul7_shift:
     rr         h
     rr         l
     rr         d
     rr         e
 
+    or         a
     bit         0,e             ; bit 8 of 16
     jr         z,l_mul8_noadd
     add         hl,bc
-    jr         l_mul8_shift
 l_mul8_noadd:
-    or         a
-l_mul8_shift:
     rr         h
     rr         l
     rr         d
     rr         e
 
+    or         a
     bit         0,e             ; bit 9 of 16
     jr         z,l_mul9_noadd
     add         hl,bc
-    jr         l_mul9_shift
 l_mul9_noadd:
-    or         a
-l_mul9_shift:
     rr         h
     rr         l
     rr         d
     rr         e
 
+    or         a
     bit         0,e             ; bit 10 of 16
     jr         z,l_mul10_noadd
     add         hl,bc
-    jr         l_mul10_shift
 l_mul10_noadd:
-    or         a
-l_mul10_shift:
     rr         h
     rr         l
     rr         d
     rr         e
 
+    or         a
     bit         0,e             ; bit 11 of 16
     jr         z,l_mul11_noadd
     add         hl,bc
-    jr         l_mul11_shift
 l_mul11_noadd:
-    or         a
-l_mul11_shift:
     rr         h
     rr         l
     rr         d
     rr         e
 
+    or         a
     bit         0,e             ; bit 12 of 16
     jr         z,l_mul12_noadd
     add         hl,bc
-    jr         l_mul12_shift
 l_mul12_noadd:
-    or         a
-l_mul12_shift:
     rr         h
     rr         l
     rr         d
     rr         e
 
+    or         a
     bit         0,e             ; bit 13 of 16
     jr         z,l_mul13_noadd
     add         hl,bc
-    jr         l_mul13_shift
 l_mul13_noadd:
-    or         a
-l_mul13_shift:
     rr         h
     rr         l
     rr         d
     rr         e
 
+    or         a
     bit         0,e             ; bit 14 of 16
     jr         z,l_mul14_noadd
     add         hl,bc
-    jr         l_mul14_shift
 l_mul14_noadd:
-    or         a
-l_mul14_shift:
     rr         h
     rr         l
     rr         d
     rr         e
 
+    or         a
     bit         0,e             ; bit 15 of 16
     jr         z,l_mul15_noadd
     add         hl,bc
-    jr         l_mul15_shift
 l_mul15_noadd:
-    or         a
-l_mul15_shift:
     rr         h
     rr         l
     rr         d
     rr         e
 
+    or         a
     bit         0,e             ; bit 16 of 16
     jr         z,l_mul16_noadd
     add         hl,bc
-    jr         l_mul16_shift
 l_mul16_noadd:
-    or         a
-l_mul16_shift:
     rr         h
     rr         l
     rr         d
