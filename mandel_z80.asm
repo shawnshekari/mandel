@@ -1,52 +1,15 @@
 *Title  Compute a Mandelbrot set on a simple Z80 computer.
 ;
-; From https://rosettacode.org/wiki/Mandelbrot_set#Z80_Assembly
-; Adapted to CP/M and colorzied by J.B. Langston
-; Updated to support HiTech-C Assembler on CP/M 04/03/2024 Shawn Reed
-; Updated to use RomWBW BIOS calls to output 04/06/2024 Shawn Reed
-; Updated skip sending color codes unless the iteration count changes 
-;    to reduce overhead of sending via serial 04/08/2024 Shawn Reed
-; Updated to Check for ESC key to stop processing 04/08/2024 Shawn Reed
-; Updated to read RTC and print start and end date/time 04/10/2024 Shawn Reed
-; Updated to Calculate processing time and display 04/12/2024 Shawn Reed
-; Ported from Z180 to plain Z80: replaced the MLT-based l_muls_32_16x16
-;    with a pure Z80 shift-and-add 16x16->32 multiply (no MLT on Z80).
-;    RST 8 HBIOS calls are unchanged - they are portable across every
-;    RomWBW target, Z80 or Z180. Verified against real multiplication on
-;    2000+ random/edge-case vectors before ever touching hardware.
-;    08/10/2026 Shawn Reed w/ Claude
-; Guarded both RTCGETTIM calls on the HBIOS result code so machines with
-;    no RTC hardware (e.g. this RC2014 Pro) print a clean "No RTC present"
-;    message instead of garbage BCD date/time. 08/10/2026 Shawn Reed w/ Claude
-; Fixed a latent bug inherited from the Z180 source: the divergence check
-;    used "ld bc,(divergent)" (memory-indirect) instead of "ld bc,divergent"
-;    (immediate). "divergent" is a compile-time constant (1024), not a
-;    label - the indirect form was reading 2 bytes from absolute address
-;    0x0400, which happens to land inside the hsv color table. It produced
-;    a plausible-looking image purely by coincidence of that build's memory
-;    layout, and broke (uniform color, no shape) the moment code size
-;    shifted which bytes landed at 0x0400. 08/10/2026 Shawn Reed w/ Claude
-; Unrolled l_muls_32_16x16's 16-bit shift-add loop into 16 straight-line
-;    steps. It's the hottest routine in this build (called 3x per
-;    Mandelbrot iteration, no hardware multiply to lean on), so trading
-;    code size to drop the dec/jr nz loop-control overhead on every bit
-;    was worth it. 08/10/2026 Shawn Reed w/ Claude
+; Plain-Z80 fork of mandel_z180.asm - see README.md for full history and
+; measured timings on each board. No hardware multiply on plain Z80, so
+; l_muls_32_16x16 is a software shift-add multiply instead of the Z180's
+; MLT-based one.
 ;
 ; ToDo
 ;
 ; Take in command line parameters and/or read config file
 ; Produce CSV file for high res on host PC
 ; Any gains in separating calculation from sending over serial?
-
-; Running the downloaded origial mandel.com from J.B. Langston on my SC722 it takes 2:20 @ 18.4MHz
-; Current version as of 04/10/2024 is taking 45 seconds @ 18.4MHz
-; With not char out it takes 39 seconds @ 18.4MHz
-; With not char out it takes 25 seconds @ 36.8MHz 1 mem WS
-;
-; Z80 port has no hardware multiply, so l_muls_32_16x16 is a software
-; shift-add multiply instead - expect this build to run meaningfully
-; slower per-pixel than the Z180 original at the same clock speed.
-
 
 ; Hi-Tech Z80 C Compiler (CP/M-80) V3.09-17
 ; Copyright (C) 1984-87 HI-TECH SOFTWARE
@@ -60,6 +23,13 @@
 ; https://smallcomputercentral.com/sc792-modular-z180-computer/
 
 ;*Include widget.asm
+
+; Set to 0 to skip all pixel/color output (colorpixel call below) - isolates
+; compute time from serial-I/O time for timing comparisons. Set to 1 for
+; normal operation. Use COND/ENDC, not IF/ENDIF - this ZAS build's "IF" alias
+; for COND appears broken (silent syntax error), even though both are
+; documented as synonyms and z80asm accepts either. COND/ENDC work on both.
+OUTPUT          EQU     1
 
         ORG     100h
 
@@ -115,8 +85,24 @@ inner_loop2:
 
         ld      a, (iteration_max)
         ld      b, a
-iteration_loop: 
+iteration_loop:
         push    bc
+
+        ld      hl, (z_0)               ; Compute DE HL = z_0 * z_0 first -
+        ld      d, h                    ; check it alone before doing any
+        ld      e, l                    ; more work: z_1^2 >= 0 always, so
+        call    l_muls_32_16x16         ; if z_0^2 alone already diverges,
+        ld      (z_0_square_low), hl    ; the sum will too - skip z_1^2 and
+        ld      (z_0_square_high), de   ; the cross product entirely
+
+        ld      l, h                    ; reposition (z_0^2)/scale into hl
+        ld      h, e                    ; (same divide-by-256 trick as below)
+        ld      bc, divergent
+        and     a
+        sbc     hl, bc
+        jp      NC, bailout             ; z_0^2 alone already >= divergent -
+                                         ; jp not jr, bailout is >127 bytes
+                                         ; away here
 
         ld      hl, (z_1)               ; Compute DE HL = z_1 * z_1
         ld      d, h
@@ -125,19 +111,34 @@ iteration_loop:
         ld      (z_1_square_low), hl    ; z_1 ** 2 is needed later again
         ld      (z_1_square_high), de
 
-        ld      hl, (z_0)               ; Compute DE HL = z_0 * z_0
-        ld      d, h
-        ld      e, l
-        call    l_muls_32_16x16
-        ld      (z_0_square_low), hl    ; z_1 ** 2 will be also needed
-        ld      (z_0_square_high), de
-        
-        and     a                       ; Compute subtraction
+        ld      hl, (z_0_square_low)    ; Combined check: (z_0^2+z_1^2)/scale
+        ld      de, (z_1_square_low)    ; >= divergent? If so, this is the
+        add     hl, de                  ; last iteration for this pixel -
+        ld      b, h                    ; skip the cross product too, it's
+        ld      c, l                    ; only needed for the NEXT
+                                         ; iteration's z_1
+        ld      hl, (z_0_square_high)
+        ld      de, (z_1_square_high)
+        adc     hl, de
+
+        ld      h, l                    ; HL now contains (z_0 ^ 2 +
+        ld      l, b                    ; z_1 ^ 2) / scale
+
+        ld      bc, divergent           ; immediate value, not (divergent) -
+                                         ; that was dereferencing memory address
+                                         ; 0x0400, which lands inside the hsv
+                                         ; color table by coincidence
+        and     a
+        sbc     hl, bc
+        jp      NC, bailout             ; jp not jr, out of jr's +-127 range
+
+        ; Still converging - compute z_0^2 - z_1^2 and 2*z_0*z_1, then update
+        ld      hl, (z_0_square_low)    ; Compute subtraction
+        and     a
         ld      bc, (z_1_square_low)
         sbc     hl, bc
         push    hl                      ; Save lower 16 bit of result
-        ld      h, d
-        ld      l, e
+        ld      hl, (z_0_square_high)
         ld      bc, (z_1_square_high)
         sbc     hl, bc
         pop     bc                      ; HL BC = z_0 ^ 2 - z_1 ^ 2
@@ -163,35 +164,16 @@ iteration_loop:
         add     hl, bc
         ld      (z_0), hl
 
-        ld      hl, (z_0_square_low)    ; Use the squares computed
-        ld      de, (z_1_square_low)    ; above
-        add     hl, de
-        ld      b, h                    ; BC contains lower word of sum
-        ld      c, l
-
-        ld      hl, (z_0_square_high)
-        ld      de, (z_1_square_high)
-        adc     hl, de
-
-        ld      h, l                    ; HL now contains (z_0 ^ 2 -
-        ld      l, b                    ; z_1 ^ 2) / scale
-        
-        ld      bc,divergent            ; immediate value, not (divergent) -
-                                         ; that was dereferencing memory address
-                                         ; 0x0400, which lands inside the hsv
-                                         ; color table by coincidence
-        and     a
-        sbc     hl, bc
-
-        jr      C, iteration_dec        ; No break
-        pop     bc                      ; Get latest iteration counter
-        jr      iteration_end           ; Exit loop
-
-iteration_dec:  
         pop     bc                      ; Get iteration counter
         djnz    iteration_loop          ; We might fall through!
+        jr      iteration_end
+
+bailout:
+        pop     bc                      ; Get iteration counter (unchanged)
 iteration_end:
+        COND    OUTPUT
         call    colorpixel
+        ENDC
 
         ld      de, (x_step)
         ld      hl, (x)
@@ -268,7 +250,18 @@ colorpixel:
         ; Fall through to send the pixel char
 
 showpixel:
-        ld      a, pixel            ; show pixel
+        ld      a, (prevItCnt)      ; iteration count for THIS pixel - safe to
+                                     ; read here on both entry paths (jp z here
+                                     ; means b already equalled prevItCnt; the
+                                     ; fall-through path just stored the new b
+                                     ; into prevItCnt above) - can't use b
+                                     ; directly, colorpixel clobbers it to 0
+                                     ; while building the hsv index
+        ld      c, a                ; character varies with iteration count on
+        ld      b, 0                ; every pixel (unlike color, which is only
+        ld      hl, chartable       ; re-sent when it changes) so a plain-text
+        add     hl, bc              ; capture with ANSI stripped stays legible
+        ld      a, (hl)             ; and diffable without a color terminal
         call    printCh
         ret
 
@@ -373,197 +366,165 @@ l_pos_hl:    ; prepare unsigned dehl = de x hl
     ; unrolled 16x - the multiply is the hottest routine in this program
     ; (called 3x per Mandelbrot iteration), so the dec/jr nz loop-control
     ; overhead was worth trading for code size here
+    or         a
     bit         0,e             ; bit 1 of 16
-    jr          z,l_mul1_noadd
+    jr         z,l_mul1_noadd
     add         hl,bc
-    jr          l_mul1_shift
 l_mul1_noadd:
-    or          a
-l_mul1_shift:
-    rr          h
-    rr          l
-    rr          d
-    rr          e
+    rr         h
+    rr         l
+    rr         d
+    rr         e
 
+    or         a
     bit         0,e             ; bit 2 of 16
-    jr          z,l_mul2_noadd
+    jr         z,l_mul2_noadd
     add         hl,bc
-    jr          l_mul2_shift
 l_mul2_noadd:
-    or          a
-l_mul2_shift:
-    rr          h
-    rr          l
-    rr          d
-    rr          e
+    rr         h
+    rr         l
+    rr         d
+    rr         e
 
+    or         a
     bit         0,e             ; bit 3 of 16
-    jr          z,l_mul3_noadd
+    jr         z,l_mul3_noadd
     add         hl,bc
-    jr          l_mul3_shift
 l_mul3_noadd:
-    or          a
-l_mul3_shift:
-    rr          h
-    rr          l
-    rr          d
-    rr          e
+    rr         h
+    rr         l
+    rr         d
+    rr         e
 
+    or         a
     bit         0,e             ; bit 4 of 16
-    jr          z,l_mul4_noadd
+    jr         z,l_mul4_noadd
     add         hl,bc
-    jr          l_mul4_shift
 l_mul4_noadd:
-    or          a
-l_mul4_shift:
-    rr          h
-    rr          l
-    rr          d
-    rr          e
+    rr         h
+    rr         l
+    rr         d
+    rr         e
 
+    or         a
     bit         0,e             ; bit 5 of 16
-    jr          z,l_mul5_noadd
+    jr         z,l_mul5_noadd
     add         hl,bc
-    jr          l_mul5_shift
 l_mul5_noadd:
-    or          a
-l_mul5_shift:
-    rr          h
-    rr          l
-    rr          d
-    rr          e
+    rr         h
+    rr         l
+    rr         d
+    rr         e
 
+    or         a
     bit         0,e             ; bit 6 of 16
-    jr          z,l_mul6_noadd
+    jr         z,l_mul6_noadd
     add         hl,bc
-    jr          l_mul6_shift
 l_mul6_noadd:
-    or          a
-l_mul6_shift:
-    rr          h
-    rr          l
-    rr          d
-    rr          e
+    rr         h
+    rr         l
+    rr         d
+    rr         e
 
+    or         a
     bit         0,e             ; bit 7 of 16
-    jr          z,l_mul7_noadd
+    jr         z,l_mul7_noadd
     add         hl,bc
-    jr          l_mul7_shift
 l_mul7_noadd:
-    or          a
-l_mul7_shift:
-    rr          h
-    rr          l
-    rr          d
-    rr          e
+    rr         h
+    rr         l
+    rr         d
+    rr         e
 
+    or         a
     bit         0,e             ; bit 8 of 16
-    jr          z,l_mul8_noadd
+    jr         z,l_mul8_noadd
     add         hl,bc
-    jr          l_mul8_shift
 l_mul8_noadd:
-    or          a
-l_mul8_shift:
-    rr          h
-    rr          l
-    rr          d
-    rr          e
+    rr         h
+    rr         l
+    rr         d
+    rr         e
 
+    or         a
     bit         0,e             ; bit 9 of 16
-    jr          z,l_mul9_noadd
+    jr         z,l_mul9_noadd
     add         hl,bc
-    jr          l_mul9_shift
 l_mul9_noadd:
-    or          a
-l_mul9_shift:
-    rr          h
-    rr          l
-    rr          d
-    rr          e
+    rr         h
+    rr         l
+    rr         d
+    rr         e
 
+    or         a
     bit         0,e             ; bit 10 of 16
-    jr          z,l_mul10_noadd
+    jr         z,l_mul10_noadd
     add         hl,bc
-    jr          l_mul10_shift
 l_mul10_noadd:
-    or          a
-l_mul10_shift:
-    rr          h
-    rr          l
-    rr          d
-    rr          e
+    rr         h
+    rr         l
+    rr         d
+    rr         e
 
+    or         a
     bit         0,e             ; bit 11 of 16
-    jr          z,l_mul11_noadd
+    jr         z,l_mul11_noadd
     add         hl,bc
-    jr          l_mul11_shift
 l_mul11_noadd:
-    or          a
-l_mul11_shift:
-    rr          h
-    rr          l
-    rr          d
-    rr          e
+    rr         h
+    rr         l
+    rr         d
+    rr         e
 
+    or         a
     bit         0,e             ; bit 12 of 16
-    jr          z,l_mul12_noadd
+    jr         z,l_mul12_noadd
     add         hl,bc
-    jr          l_mul12_shift
 l_mul12_noadd:
-    or          a
-l_mul12_shift:
-    rr          h
-    rr          l
-    rr          d
-    rr          e
+    rr         h
+    rr         l
+    rr         d
+    rr         e
 
+    or         a
     bit         0,e             ; bit 13 of 16
-    jr          z,l_mul13_noadd
+    jr         z,l_mul13_noadd
     add         hl,bc
-    jr          l_mul13_shift
 l_mul13_noadd:
-    or          a
-l_mul13_shift:
-    rr          h
-    rr          l
-    rr          d
-    rr          e
+    rr         h
+    rr         l
+    rr         d
+    rr         e
 
+    or         a
     bit         0,e             ; bit 14 of 16
-    jr          z,l_mul14_noadd
+    jr         z,l_mul14_noadd
     add         hl,bc
-    jr          l_mul14_shift
 l_mul14_noadd:
-    or          a
-l_mul14_shift:
-    rr          h
-    rr          l
-    rr          d
-    rr          e
+    rr         h
+    rr         l
+    rr         d
+    rr         e
 
+    or         a
     bit         0,e             ; bit 15 of 16
-    jr          z,l_mul15_noadd
+    jr         z,l_mul15_noadd
     add         hl,bc
-    jr          l_mul15_shift
 l_mul15_noadd:
-    or          a
-l_mul15_shift:
-    rr          h
-    rr          l
-    rr          d
-    rr          e
+    rr         h
+    rr         l
+    rr         d
+    rr         e
 
+    or         a
     bit         0,e             ; bit 16 of 16
-    jr          z,l_mul16_noadd
+    jr         z,l_mul16_noadd
     add         hl,bc
-    jr          l_mul16_shift
 l_mul16_noadd:
-    or          a
-l_mul16_shift:
-    rr          h
-    rr          l
-    rr          d
-    rr          e
+    rr         h
+    rr         l
+    rr         d
+    rr         e
 
     ex          de,hl
 
@@ -866,7 +827,6 @@ sqBracket       EQU     5bh     ; ANSCII "[" (91 decimal/0x5B)
 cr		EQU	13
 lf		EQU	10
 esc             EQU     27
-pixel           EQU     35      ; The original block character 219 I like using  35 as it is a #
 scale           EQU     256
 divergent       EQU     scale * 4
 
@@ -933,6 +893,22 @@ hsv:            DEFB    0
                 DEFB    25, 25, 21, 20, 20
                 DEFB    19, 19, 18, 18, 18
 
+; Character table - same shape/indexing as hsv above (index = iteration
+; count at bailout: 0 = reached iteration_max without diverging, 1..30 =
+; diverged with that many iterations left), but printed on EVERY pixel
+; regardless of whether the color changed. Colors are for the fractal
+; image; these are so a stripped-ANSI/plain-text capture of the output
+; stays legible and diffable without a color-capable terminal - each
+; char maps 1:1 to an iteration count, decodable at a glance ('0'-'9'
+; then 'A'-'U' for 10-30).
+chartable:      DEFB    '0'
+                DEFB    '1','2','3','4','5'
+                DEFB    '6','7','8','9','A'
+                DEFB    'B','C','D','E','F'
+                DEFB    'G','H','I','J','K'
+                DEFB    'L','M','N','O','P'
+                DEFB    'Q','R','S','T','U'
+
 
 
 welcome:        DEFM    'Generating a Mandelbrot set'
@@ -950,3 +926,6 @@ ansifg:         DEFB    esc, sqBracket, 51, 56, 59, 53, 59, hbios_EOS  ; Foregro
 cls:            DEFB    esc, sqBracket, 50, 74, hbios_EOS              ; Clear the screen "esc[2J"
         
                 END
+
+
+

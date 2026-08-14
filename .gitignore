@@ -1,0 +1,10 @@
+# Third-party reference material - provenance/attribution not confirmed,
+# kept locally only, not for distribution.
+HI-TECH Z80 C Compiler Manual.txt
+HI-TECH Z80 C Compiler Messages.txt
+z80-opcodes.txt
+z80-optimizations.txt
+
+# Local assembler build artifacts
+*.lis
+*.lst
