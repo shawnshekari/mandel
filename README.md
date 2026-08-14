@@ -4,6 +4,15 @@ I am using this mostly to just learn some lessons on my SC722 18MHz Z180 modular
 
 I am writing directly to hardware and breaking portability (RomWBW HBIOS calls, Z180 specific instructions, ...)
 
+## Two tracked versions
+
+This repo tracks two diverging versions of the program:
+
+- **`mandel_z180.asm`** - the original, targeting the SC722 Z180 board specifically (RomWBW HBIOS calls, Z180-specific instructions).
+- **`mandel_z80.asm`** - a fork targeting plain Z80, used for the optimization work below. Current optimization effort is focused here.
+
+Both assemble/link on-device with `ZAS`/`LINQ` (see `MAKE.SUB`).
+
 # Mandelbrot Set Generator for Z80 (CP/M) - Optimization Readme
 
 This document outlines potential optimizations for the Mandelbrot set generator written in Z80 assembly for CP/M, targeting RomWBW and the Z180 CPU. The optimizations are listed in order of their *likely* impact on rendering speed, from highest to lowest.  However, the actual impact may vary depending on the specific hardware and configuration.  **Thorough testing and measurement are crucial after implementing each optimization.**
