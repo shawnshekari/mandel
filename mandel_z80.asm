@@ -172,12 +172,11 @@ iteration_loop:
         and     a
         sbc     hl, bc
 
+        pop     bc                      ; Get iteration counter (both paths need it)
         jr      C, iteration_dec        ; No break
-        pop     bc                      ; Get latest iteration counter
         jr      iteration_end           ; Exit loop
 
-iteration_dec:  
-        pop     bc                      ; Get iteration counter
+iteration_dec:
         djnz    iteration_loop          ; We might fall through!
 iteration_end:
         COND    OUTPUT
