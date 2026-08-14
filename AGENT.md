@@ -70,10 +70,13 @@ UNZIP <name> /E    # extract - MUST be /E (leading slash); bare E is
 8.3 filename truncation applies to the extracted name (`mandel_z80.asm` ->
 `MANDEL_Z.ASM`) - account for that when scripting this.
 
-`UNZIP.COM` itself (`UNZIPZ 0.4-1 - SC`, pulled from the RomWBW repo) is
-currently untracked in this repo pending a licensing/provenance decision -
-check it's still present before relying on this workflow in a fresh
-checkout.
+`UNZIP.COM` itself (`UNZIPZ 0.4-1 - SC`) is **not** kept in this repo -
+it ships as part of RomWBW itself, so it's expected to already be
+somewhere on the device (`H:` or one of the other drives). It wasn't
+found in this session's drive listings, which was unexpected (per the
+user, RomWBW should include it) and not resolved - worth checking again,
+or re-sourcing from the RomWBW distribution, before relying on this
+workflow.
 
 ## Build commands
 
