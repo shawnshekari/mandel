@@ -60,23 +60,38 @@ device = 36.23s total - **~32% faster end-to-end**, verified
 byte-identical after extraction. XMODEM transfer time is apparently
 dominated by per-block overhead, not raw bytes, so shrinking the block
 count wins even after paying for decompression.
+**Two different `UNZIP.COM` builds exist on this device, with different
+syntax, and ZSDOS path search (`A0,A1,H0`) picks whichever one it finds
+first depending on what's currently on `A:`/`B:`/`H:`** - check the
+banner line each time, don't assume:
+
 ```
+UNZIPZ 0.4-1 - SC     (found on A: this session)
 zip -j out.zip mandel_z80.asm          # on host, before rc2014_upload
 UNZIP <name>       # no .ZIP, no option: check-only, CRCs of all files
 UNZIP <name> /E    # extract - MUST be /E (leading slash); bare E is
                     # parsed as an archive-filename filter instead and
                     # silently matches nothing
+
+UNZIP 1.8-7 - DPG      (showed up once B: was cleared and path search
+                        landed on a different UNZIP.COM elsewhere)
+UNZIP <name>              # no destination arg: check-only, lists "Skipping"
+UNZIP <name> d:*.*        # MUST give an explicit drive-letter destination
+                          # to extract, even for the current drive (bare
+                          # "*.*" with no drive prefix silently no-ops too -
+                          # "Checking" instead of "Extracting" in the banner
+                          # is the tell)
 ```
 8.3 filename truncation applies to the extracted name (`mandel_z80.asm` ->
-`MANDEL_Z.ASM`) - account for that when scripting this.
+`MANDEL_Z.ASM`) - account for that when scripting this, regardless of
+which `UNZIP` variant is in play.
 
-`UNZIP.COM` itself (`UNZIPZ 0.4-1 - SC`) is **not** kept in this repo -
-it ships as part of RomWBW itself, so it's expected to already be
-somewhere on the device (`H:` or one of the other drives). It wasn't
-found in this session's drive listings, which was unexpected (per the
-user, RomWBW should include it) and not resolved - worth checking again,
-or re-sourcing from the RomWBW distribution, before relying on this
-workflow.
+`UNZIP.COM` itself is **not** kept in this repo - it ships as part of
+RomWBW, and both variants above were eventually found already on-device
+(`A:` had the `0.4-1 SC` build; a later session found `1.8-7 DPG`
+elsewhere on the search path after `B:` was cleared) - the earlier note
+here about it being missing was a stale drive-listing snapshot, not a
+real gap.
 
 ## Build commands
 

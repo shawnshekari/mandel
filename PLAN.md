@@ -17,13 +17,123 @@ numbers and commit history for full detail on each):
    `z_0^2+z_1^2`, before computing the cross-product multiply and
    updating z_0/z_1, so points that diverge fast skip work they don't
    need. ~3.3-3.7% below original baseline overall (cumulative with the
-   two prior optimizations).
+   two prior optimizations). **Confirmed true current baseline: 43.61-
+   43.62s** (re-measured fresh from git HEAD this session after
+   discovering the on-device `J:MANDEL.COM` had gone stale - see below).
 
 **Not yet decided:** what to tackle next. Precision reduction (drop
-`scale` from 256, shrinking the multiply routine itself) and further
-early-bailout tuning (pushing the check even earlier/cheaper) were both
-on the table when this was last picked up - see conversation/ask the user
-which direction before starting.
+`scale` from 256, shrinking the multiply routine itself) is the main
+candidate left on the table from the original optimization list. The
+user also floated changing the printed *character* (not just the color)
+per-pixel so the fractal shape stays legible without VT100 color
+support - a separate, orthogonal visual-output change, not yet started.
+
+### Tried and reverted: magnitude pre-check before the multiply (negative result)
+
+Idea: before each of the two `l_muls_32_16x16` calls in `iteration_loop`,
+check whether `|z_0|` (or `|z_1|`) alone already exceeds the divergence
+threshold in raw fixed-point units, and skip that multiply entirely
+rather than computing the square just to immediately bail on it.
+
+**Measured result after fixing a real correctness bug (below): ~44.44s,
+vs the confirmed 43.61-43.62s baseline - about 1.9% *slower*, not
+faster.** The overhead of the extra compare-and-branch on every
+iteration outweighs the benefit of skipping the multiply on the (rarer
+than expected) iterations where a point's magnitude already exceeds the
+threshold before this iteration's multiply runs. **Reverted** -
+`mandel_z80.asm` is back to the early-bailout-only version. Worth
+remembering if precision reduction or other future work changes the
+iteration count/shape enough to make this trade-off different, but not
+worth keeping in the hot path as-is.
+
+This was also a useful lesson in **not trusting a single measurement
+against the wrong baseline**: the first pass compared the new build
+against the on-device `J:MANDEL.COM`, which turned out to be a *stale*
+build predating all three prior optimizations (it measured 45.1s,
+matching README's original pre-optimization baseline, not the 43.61s
+early-bailout figure). That made the regression look like a "modest
+1.5% win" until a fresh git-HEAD build was assembled and measured
+directly (43.62s) for a true apples-to-apples comparison. **Lesson:
+don't assume a `J:` drive artifact from device state reflects the
+current git HEAD - rebuild the exact baseline being compared against
+when the numbers matter**, especially after any gap between sessions.
+
+### Bug hit and fixed while building the (reverted) magnitude pre-check
+
+First attempt at the pre-check used a single high-byte-only comparison
+(`ld a,h` / `inc a` / `cp 3` / `jp NC,bailout`) reasoning that
+`divergent*scale` (262144) is exactly `512^2`, so `|z_0| >= 512` should
+be equivalent to the existing squared check. **This is wrong for
+negative values** - two's complement is asymmetric here: for
+`z_0` in the `h=0xFE` byte (raw values -512..-257), magnitude actually
+*decreases* as the low byte increases, so only `z_0 == -512` exactly
+should bail, but the high-byte-only check bailed on the *entire* byte
+(all 256 values), incorrectly treating e.g. `z_0 = -257` (magnitude 257,
+well under threshold) as divergent.
+
+This was caught via real-hardware output comparison, not by inspection -
+the rendered image looked visibly wrong (missing structure) on-device,
+and stripping ANSI codes from the captured output to diff pixel colors
+against a known-good baseline run showed **3283 of 6966 pixels (47%)**
+had a different iteration-count color than the true baseline, despite
+every pixel still being drawn (same `#` count both runs - the "sparse"
+visual impression during debugging was a color-contrast illusion, not
+missing pixels). That 47%-wrong version was the one that measured
+~33.5s (~23% faster) - fast because it was bailing out of iterations it
+had no business bailing out of.
+
+**Fix:** bias `z_0` (or `z_1`) by `+511` and do a single unsigned 16-bit
+compare against `1023` (`add hl,bc` / `sbc hl,bc` / `jp NC,bailout`).
+This handles the wraparound correctly at both boundaries. Verified two
+ways before re-touching hardware: (1) exhaustively in Python across all
+65536 possible 16-bit `z_0` values, comparing against the *exact*
+truncation semantics of the original 32-bit-multiply-then-shift check -
+only diverges for `|z_0| > ~31000` raw units, far beyond what this loop
+can ever produce given bounded per-iteration growth; (2) after
+redeploying, stripped-ANSI pixel-color diff against the baseline run
+came back **byte-for-byte identical (0 of 6966 pixels differ)**.
+
+**Process lesson:** screenshots of the live terminal are not a reliable
+way to diff program output - color-contrast illusions and ambiguity
+about *which* run a screenshot was taken during (this session initially
+mixed up which image was "old" vs "new") both got in the way. Capturing
+raw command output and diffing the stripped ANSI/pixel data
+programmatically is what actually resolved it. Also: manually
+retyping/pasting captured terminal output (with its embedded ESC bytes)
+into a file is unreliable - the ESC bytes got silently dropped on two
+separate attempts in this session. If this comes up again, prefer a
+method that doesn't require manually reproducing raw control characters
+by hand.
+
+### Second bug hit and fixed in the same change: `djnz` out-of-range
+
+Adding the two pre-checks grew `iteration_loop`'s body by ~14 bytes,
+pushing the loop's existing `djnz iteration_loop` backward branch to
+**-141 bytes** - past `DJNZ`'s +-127 range. Unlike `JR` (which has a
+`JP`-equivalent long form to fall back on), `DJNZ` has no such
+substitute, so this can't be fixed by switching mnemonics the way the
+earlier JR bug was (see README/commit history). Fixed with `dec b` /
+`jp nz,iteration_loop` instead - `dec b` sets the Z flag the same way
+djnz's implicit decrement would, and nothing between the old djnz site
+and the next flag use depends on djnz's flags-unaffected behavior.
+
+**Important correction to an earlier assumption:** PLAN.md previously
+noted "z80asm (local toolbox) reported 0 errors" for the earlier JR
+range bug, and guessed it silently auto-promotes out-of-range `JR` to
+`JP`. Reading z80asm's own source (`~/z80pack/z80asm/z80asm.c`,
+`z80arfun.c`) this session showed that's **not quite right**: z80asm's
+`asmerr()` only prints the offending line/message when the error occurs
+during **pass 1**; range-check failures like this happen during pass 2
+(`chk_sbyte` inside `op_jr`/`op_djnz`), where `asmerr()` silently
+increments the error counter with **no message at all** - only the final
+"N error(s)" line changes from a JR/DJNZ range failure, with zero
+indication of which line. Local z80asm does *not* auto-promote; it just
+reports the error invisibly. **Lesson: always check the "N error(s)"
+count itself, don't assume 0 just because no per-line error text
+printed** - and if it's nonzero with no visible detail, suspect a
+pass-2-only range check (JR/DJNZ backward or forward branch too far)
+first, especially right after a code-size change near a
+loop-back-edge.
 
 ### Known ZAS bug hit and fixed while building early-bailout
 
@@ -111,9 +221,12 @@ intact afterward. Committed.
   once.
 - **Binary compare across all available assemblers** - once the current
   source is stable, build with real ZAS (device), pasmo, and z80asm and
-  diff the output. Possible finding given what we now know: pasmo/z80asm
-  may auto-promote out-of-range `JR`->`JP` silently, which would show up
-  as a real byte-level difference worth explaining.
+  diff the output. Note: an earlier guess here that z80asm silently
+  auto-promotes out-of-range `JR`/`DJNZ` was checked against z80asm's own
+  source this session and found to be wrong - it just fails silently
+  (see "Important correction to an earlier assumption" above) - so don't
+  expect that particular difference; still worth doing the comparison for
+  other possible divergences.
 - **SDCC comparison build** (Phase 3.1) - port to C, build with `sdcc
   -mz80` in a `mandel-c` toolbox, compare size/runtime against hand-tuned
   asm. Educational/exploratory, lower priority than the asm optimization
@@ -132,3 +245,6 @@ intact afterward. Committed.
   discovered issue from the JR bug above - cpmsim traps/silently fails
   regardless of the JR bug). User has the RomWBW source and thinks a
   custom emulator with real HBIOS/RomWBW support may not be too hard.
+  Before building one from scratch, take a look at an existing project
+  that may already solve this: https://github.com/avwohl/romwbw_emu -
+  not yet evaluated for whether it actually runs ZSDOS/ZAS correctly.
