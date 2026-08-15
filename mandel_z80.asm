@@ -70,14 +70,99 @@ outer_loop:
 
         ld      hl, (x_start)
         ld      (x), hl
-inner_loop:     
-        jp      charIn
-inner_loop2:
+
+        ld      hl, line_buf            ; reset the per-row output buffer -
+        ld      (buf_ptr), hl           ; colorpixel/showpixel append to it
+                                         ; through the row, flushLine sends it
+                                         ; and resets it at inner_loop_end
+
+        jp      charIn                  ; ESC check once per row, not once per
+                                         ; pixel - charInEnd falls back into
+                                         ; inner_loop below either way
+inner_loop:
         ld      hl, (x_end)
         ld      de, (x)
         and     a
         sbc     hl, de
         jp      m, inner_loop_end
+
+        ; Cheap pre-check before the main loop even starts: is this pixel
+        ; provably INSIDE the set (period-2 bulb or main cardioid)? Interior
+        ; points are the single biggest cost in this program - they never
+        ; trigger early bailout, so each one pays for the full iteration_max
+        ; budget (30 x 3 multiplies). A handful of multiplies up front to
+        ; skip that entirely is a much better trade than the earlier
+        ; magnitude pre-check (reverted - see PLAN.md): that one saved at
+        ; most a single multiply on a hit; this one can save ~90.
+        ;
+        ; All in scale-256 fixed point, same "square via l_muls_32_16x16
+        ; then >>8" trick used throughout iteration_loop (a raw value
+        ; squared comes back scaled by 65536; >>8 renormalizes a squared
+        ; quantity to scale 256, matching a real threshold T as T*256).
+        ; Assumes coordinates stay within this file's default range
+        ; (roughly -2..1 x, -1.25..1.25 y) - like the rest of the fixed-
+        ; point math here, larger ranges risk overflowing the 16-bit
+        ; intermediate sums/products.
+        ld      hl, (y)                 ; cy2_scale256 = (Cy^2) at scale 256
+        call    square_16               ; - shared by both checks below
+        ld      l, h
+        ld      h, e
+        ld      (cy2_scale256), hl
+
+        ld      hl, (x)                 ; Period-2 bulb: (Cx+1)^2+Cy^2 <= 1/16
+        ld      bc, scale               ; -> at scale 256: (cx+256)^2>>8 + cy2
+        add     hl, bc                  ; <= 16, i.e. sum < 17 - tightened to
+        call    square_16               ; < 14: each of the two >>8 squaring
+                                         ; steps floor-rounds down by up to
+                                         ; just under 1, so the computed sum
+        ld      l, h                    ; can undershoot the true value by up
+        ld      h, e                    ; to ~2 - margin of 3 verified by
+        ld      de, (cy2_scale256)      ; brute-force check against exact
+        add     hl, de                  ; float math across the full render
+        ld      bc, 14                  ; range plus a wide margin: 0 false
+        and     a                       ; positives (see PLAN.md)
+        sbc     hl, bc
+        jp      C, mark_interior
+
+        ld      hl, (x)                 ; Main cardioid: q=(Cx-0.25)^2+Cy^2;
+        ld      bc, scale/4             ; q*(q+(Cx-0.25)) <= Cy^2/4. b_raw =
+        and     a                       ; cx-64 (0.25*scale); q_scale256 =
+        sbc     hl, bc                  ; (b_raw^2>>8) + cy2_scale256
+        push    hl                      ; save b_raw across the call
+        call    square_16
+        ld      l, h
+        ld      h, e
+        ld      de, (cy2_scale256)
+        add     hl, de                  ; hl = q_scale256
+        pop     bc                      ; bc = b_raw
+        ld      d, h                    ; de = q_scale256 (multiplicand 2)
+        ld      e, l
+        add     hl, bc                  ; hl = q_scale256+b_raw (multiplicand 1)
+        call    l_muls_32_16x16         ; hl:de = q*(q+b_raw), scale 65536
+        ld      l, h
+        ld      h, e                    ; hl = LHS at scale 256
+        ld      de, (cy2_scale256)
+        srl     d                       ; de = cy2_scale256/4 = RHS at scale
+        rr      e                       ; 256 (unsigned shift is fine - a
+        srl     d                       ; square>>8 is always >= 0)
+        rr      e
+        dec     de                      ; <= test: LHS < RHS+1, tightened to
+                                         ; < RHS-1 (3 chained >>8/floor steps
+                                         ; this time - see bulb check above
+                                         ; for why a margin is needed; this
+                                         ; one's margin verified the same way
+        and     a
+        sbc     hl, de                  ; LHS can be negative here (unlike the
+        jp      M, mark_interior        ; bulb sum, always >= 0) - jp M tests
+                                         ; the sign flag for a true SIGNED
+                                         ; "<0" test. jp C would be wrong: it
+                                         ; reads the UNSIGNED borrow, and RHS-1
+                                         ; wraps to 0xFFFF when RHS=0 (near
+                                         ; Cy=0), making "hl unsigned< 0xFFFF"
+                                         ; true for nearly everything - this
+                                         ; was a real bug, caught by the user
+                                         ; from a wrongly-solid-black band
+                                         ; across several rows near the center
 
         ld      hl, 0
         ld      (z_0), hl
@@ -89,9 +174,9 @@ iteration_loop:
         push    bc
 
         ld      hl, (z_0)               ; Compute DE HL = z_0 * z_0 first -
-        ld      d, h                    ; check it alone before doing any
-        ld      e, l                    ; more work: z_1^2 >= 0 always, so
-        call    l_muls_32_16x16         ; if z_0^2 alone already diverges,
+        call    square_16               ; check it alone before doing any
+                                         ; more work: z_1^2 >= 0 always, so
+                                         ; if z_0^2 alone already diverges,
         ld      (z_0_square_low), hl    ; the sum will too - skip z_1^2 and
         ld      (z_0_square_high), de   ; the cross product entirely
 
@@ -105,9 +190,7 @@ iteration_loop:
                                          ; away here
 
         ld      hl, (z_1)               ; Compute DE HL = z_1 * z_1
-        ld      d, h
-        ld      e, l
-        call    l_muls_32_16x16
+        call    square_16
         ld      (z_1_square_low), hl    ; z_1 ** 2 is needed later again
         ld      (z_1_square_high), de
 
@@ -168,6 +251,13 @@ iteration_loop:
         djnz    iteration_loop          ; We might fall through!
         jr      iteration_end
 
+mark_interior:
+        ld      b, 0                    ; provably inside the set (cardioid/bulb
+        jp      iteration_end           ; pre-check) - same as naturally running
+                                         ; the full iteration budget without ever
+                                         ; diverging, so use the same b=0 color/
+                                         ; char index a normal exhaustion gets
+
 bailout:
         pop     bc                      ; Get iteration counter (unchanged)
 iteration_end:
@@ -182,8 +272,13 @@ iteration_end:
 
         jp      inner_loop
 inner_loop_end:
-        ld	hl, crlfeos
-        call	printSt
+        ld      hl, (buf_ptr)   ; append CR/LF + a NUL terminator (flushLine
+        ld      (hl), cr        ; scans for it - safe since none of the real
+        inc     hl              ; bytes we ever write, ESC/digits/;/m/pixel
+        ld      (hl), lf        ; chars/CR/LF, are ever legitimately 0) and
+        inc     hl              ; flush the whole row in one pass
+        ld      (hl), 0
+        call    flushLine
 
         ld      de, (y_step)
         ld      hl, (y)
@@ -230,23 +325,26 @@ mandel_end_done:
 
         rst     0
 
-; Send the color codes only if the iteration count has changed otherwise just print the pixel character.                
+; Append pixel output to the per-row buffer (buf_ptr/line_buf) instead of
+; calling printCh directly - flushLine sends the whole row in one pass at
+; inner_loop_end. Color codes are still only appended when the iteration
+; count changes; the pixel char is appended on every pixel either way.
 colorpixel:
         ; first lets check to see if the iteration has changed
-        ld      a, (prevItCnt)     ; get the previous iteration count   
+        ld      a, (prevItCnt)     ; get the previous iteration count
         cp      b                  ; compare them (current iteration count is in B)
-        jp      z, showpixel       ; if they were the same skip the color change code 
+        jp      z, showpixel       ; if they were the same skip the color change code
 
         ld      a, b
         ld      (prevItCnt), a     ; They were different so store the new iteration count
-        
+
         ld      c,b                 ; iter count in BC so swap then to little endian
         ld      b,0
         ld      hl, hsv             ; get ANSI color code table
         add     hl, bc              ; Now hl is pointing at the new color
 
-        ld      a, (hl)             ; Put the current color into A
-        call    setcolor
+        ld      a, (hl)             ; Put the current color into A - hl is
+        call    setcolor            ; free again, setcolor loads buf_ptr itself
         ; Fall through to send the pixel char
 
 showpixel:
@@ -262,20 +360,46 @@ showpixel:
         ld      hl, chartable       ; re-sent when it changes) so a plain-text
         add     hl, bc              ; capture with ANSI stripped stays legible
         ld      a, (hl)             ; and diffable without a color terminal
-        call    printCh
+
+        ld      hl, (buf_ptr)       ; append the one char byte and advance
+        ld      (hl), a
+        inc     hl
+        ld      (buf_ptr), hl
         ret
 
+; a = color byte (0-255) on entry. Appends the full ANSI sequence
+; (ansifg's 7 bytes, fully unrolled since they're compile-time constants -
+; cheaper than a copy loop for a fixed 7-byte run) + up to 3 color digits
+; + 'm' to the buffer. Loads buf_ptr itself rather than assuming a live
+; HL from the caller, since colorpixel's hsv lookup uses hl as a table
+; pointer right up until the call.
 setcolor:
-        push    af              ; save accumulator
-        ld      hl, ansifg      ; The first part of the terminal color code
-        call    printSt
-        pop     af              ; restore the acculator
-        
-        call    printdec        ; print ANSI color code
-        ld      a, 'm'          ; The remaining part of the termial code for color
-        call    printCh
+        ld      hl, (buf_ptr)
+        ld      (hl), esc
+        inc     hl
+        ld      (hl), sqBracket
+        inc     hl
+        ld      (hl), '3'
+        inc     hl
+        ld      (hl), '8'
+        inc     hl
+        ld      (hl), ';'
+        inc     hl
+        ld      (hl), '5'
+        inc     hl
+        ld      (hl), ';'
+        inc     hl
+        call    printdec        ; appends up to 3 digit bytes via hl, advancing it
+        ld      (hl), 'm'
+        inc     hl
+        ld      (buf_ptr), hl
         ret
-        
+
+; a = value to print (0-255), hl = buffer write position (from setcolor) -
+; appends decimal digit bytes via (hl)/inc hl instead of printCh, and
+; returns with hl positioned just past the last digit written. pd1-pd4's
+; own logic only ever touches a/c/e/the stack, never h or l, so hl
+; survives untouched as the buffer cursor throughout.
 printdec:
         ld      c,-100          ; print 100s place
         call    pd1
@@ -298,7 +422,8 @@ pd2:
         jr      Z,pd4
 pd3:
         ld      a, e
-        call    printCh
+        ld      (hl), a         ; append the digit and advance the buffer
+        inc     hl              ; cursor instead of calling printCh
 
 pd4:
         pop     af
@@ -552,6 +677,194 @@ l_mul16_noadd:
     inc         de
     ret
 
+   ; Square a signed 16-bit value into a 32-bit product (always
+   ; non-negative). Purpose-built alternative to l_muls_32_16x16 for the
+   ; x*x case: since both operands are identical, only needs one sign
+   ; check/abs-value instead of two, and the result's sign is always
+   ; positive so the entire pop/xor/negate exit path above is
+   ; unnecessary - falls straight through to ex de,hl/ret instead. The
+   ; 16-step shift-add conveyor itself is unchanged from
+   ; l_muls_32_16x16, just duplicated here with unique labels (sq_mulN_
+   ; noadd instead of l_mulN_noadd) so the two routines don't collide -
+   ; kept unrolled for the same reason the original is (hottest code in
+   ; the program), and duplicated rather than shared via a second call/
+   ; ret so this doesn't add call overhead back into either routine.
+   ;
+   ; enter : hl = 16-bit signed value to square
+   ; exit  : hl = low 16 bits, de = high 16 bits of the product (same
+   ;         convention as l_muls_32_16x16, so existing call sites'
+   ;         >>8 renormalization trick - "ld l,h / ld h,e" - is unchanged)
+   ; uses  : af, bc, de, hl
+
+square_16:
+    bit         7,h
+    jr          z,sq_pos_hl     ; take absolute value once, not twice
+
+    ld          a,l
+    cpl
+    ld          l,a
+    ld          a,h
+    cpl
+    ld          h,a
+    inc         hl
+
+sq_pos_hl:
+    ld          b,h             ; bc = |value| (fixed addend)
+    ld          c,l
+    ld          d,h             ; de = |value| (shifting multiplier,
+    ld          e,l             ; consumed a bit at a time)
+    ld          hl,0            ; hl = product accumulator, starts at 0
+
+    or         a
+    bit         0,e             ; bit 1 of 16
+    jr         z,sq_mul1_noadd
+    add         hl,bc
+sq_mul1_noadd:
+    rr         h
+    rr         l
+    rr         d
+    rr         e
+    or         a
+    bit         0,e             ; bit 2 of 16
+    jr         z,sq_mul2_noadd
+    add         hl,bc
+sq_mul2_noadd:
+    rr         h
+    rr         l
+    rr         d
+    rr         e
+    or         a
+    bit         0,e             ; bit 3 of 16
+    jr         z,sq_mul3_noadd
+    add         hl,bc
+sq_mul3_noadd:
+    rr         h
+    rr         l
+    rr         d
+    rr         e
+    or         a
+    bit         0,e             ; bit 4 of 16
+    jr         z,sq_mul4_noadd
+    add         hl,bc
+sq_mul4_noadd:
+    rr         h
+    rr         l
+    rr         d
+    rr         e
+    or         a
+    bit         0,e             ; bit 5 of 16
+    jr         z,sq_mul5_noadd
+    add         hl,bc
+sq_mul5_noadd:
+    rr         h
+    rr         l
+    rr         d
+    rr         e
+    or         a
+    bit         0,e             ; bit 6 of 16
+    jr         z,sq_mul6_noadd
+    add         hl,bc
+sq_mul6_noadd:
+    rr         h
+    rr         l
+    rr         d
+    rr         e
+    or         a
+    bit         0,e             ; bit 7 of 16
+    jr         z,sq_mul7_noadd
+    add         hl,bc
+sq_mul7_noadd:
+    rr         h
+    rr         l
+    rr         d
+    rr         e
+    or         a
+    bit         0,e             ; bit 8 of 16
+    jr         z,sq_mul8_noadd
+    add         hl,bc
+sq_mul8_noadd:
+    rr         h
+    rr         l
+    rr         d
+    rr         e
+    or         a
+    bit         0,e             ; bit 9 of 16
+    jr         z,sq_mul9_noadd
+    add         hl,bc
+sq_mul9_noadd:
+    rr         h
+    rr         l
+    rr         d
+    rr         e
+    or         a
+    bit         0,e             ; bit 10 of 16
+    jr         z,sq_mul10_noadd
+    add         hl,bc
+sq_mul10_noadd:
+    rr         h
+    rr         l
+    rr         d
+    rr         e
+    or         a
+    bit         0,e             ; bit 11 of 16
+    jr         z,sq_mul11_noadd
+    add         hl,bc
+sq_mul11_noadd:
+    rr         h
+    rr         l
+    rr         d
+    rr         e
+    or         a
+    bit         0,e             ; bit 12 of 16
+    jr         z,sq_mul12_noadd
+    add         hl,bc
+sq_mul12_noadd:
+    rr         h
+    rr         l
+    rr         d
+    rr         e
+    or         a
+    bit         0,e             ; bit 13 of 16
+    jr         z,sq_mul13_noadd
+    add         hl,bc
+sq_mul13_noadd:
+    rr         h
+    rr         l
+    rr         d
+    rr         e
+    or         a
+    bit         0,e             ; bit 14 of 16
+    jr         z,sq_mul14_noadd
+    add         hl,bc
+sq_mul14_noadd:
+    rr         h
+    rr         l
+    rr         d
+    rr         e
+    or         a
+    bit         0,e             ; bit 15 of 16
+    jr         z,sq_mul15_noadd
+    add         hl,bc
+sq_mul15_noadd:
+    rr         h
+    rr         l
+    rr         d
+    rr         e
+    or         a
+    bit         0,e             ; bit 16 of 16
+    jr         z,sq_mul16_noadd
+    add         hl,bc
+sq_mul16_noadd:
+    rr         h
+    rr         l
+    rr         d
+    rr         e
+
+    ex          de,hl
+    ret                          ; product is always >= 0 - no sign
+                                  ; restoration needed here, unlike
+                                  ; l_muls_32_16x16
+
 ;------------------------------------------------------------
 ; Print BCD number
 ; Input: B --> BCD number to print
@@ -620,6 +933,28 @@ printDT:
         call    printCh
         ld      a, lf
         call    printCh
+        ret
+
+; Send the buffered row (line_buf, NUL-terminated by inner_loop_end) to
+; the console in one pass. No push/pop and no EXX needed around the
+; CIOOUT call - a real-hardware probe (see AGENT.md gotchas) confirmed
+; D/H/L and B all survive it untouched, so hl (the walking source
+; pointer) and b (the function code, loaded once below) don't need any
+; protection; only c (device number) gets silently rewritten by the call
+; and must be reloaded every time.
+flushLine:
+        ld      hl, line_buf
+        ld      b, hbios_cioout
+flushLine_top:
+        ld      a, (hl)
+        or      a
+        jp      z, flushLine_done
+        ld      e, a
+        ld      c, hbios_device
+        rst     hbios
+        inc     hl
+        jp      flushLine_top
+flushLine_done:
         ret
 
 ; Print Character
@@ -712,7 +1047,7 @@ charInEnd:
         pop     hl
         pop     de
         pop     bc
-        jp      inner_loop2             ; back to work
+        jp      inner_loop              ; back to work
 
 ;------------------------------------------------------------------------------------------------------------------------------
 ; Calculate the run time based on the start and end date/time buffers
@@ -840,11 +1175,24 @@ y_end:          DEFW    5 * scale / 4   ; Default 5
 y_step:         DEFW    scale / 20      ; Default 60
 z_0:            DEFW    0
 z_1:            DEFW    0
-scratch_0:      DEFW    0
+cy2_scale256:   DEFW    0               ; Cy^2 at scale 256, used by the
+                                         ; cardioid/bulb pre-check above
 z_0_square_high: DEFW    0
 z_0_square_low:  DEFW    0
 z_1_square_high: DEFW    0
 z_1_square_low:  DEFW    0
+
+; Per-row output buffer - colorpixel/showpixel append pixel chars and (on
+; change only) ANSI color escapes here instead of calling printCh
+; directly; flushLine sends the whole row in one pass at inner_loop_end.
+; Sized for the worst case at the current x_start/x_end/x_step (120
+; columns): 7 bytes ansifg prefix + up to 3 color digits + 'm' + 1 pixel
+; char = 12 bytes/pixel if EVERY pixel changed color, which never
+; actually happens but is the safe bound; 120*12 = 1440, +2 for the
+; trailing CR/LF appended before each flush. Resize this (and re-check
+; the math above) if x_start/x_end/x_step ever change.
+buf_ptr:        DEFW    line_buf
+line_buf:       DEFS    1536
 
 prevItCnt:      DEFB    0     ; To store the previous iteration count
 
@@ -877,21 +1225,63 @@ elapsedMins:    DEFB    0
 ;                DEFB    239, 236, 234, 232, 0
 
 ; Bands blue green to white
-;hsv:            DEFB    7                             
-;                DEFB    16, 17, 18, 19, 20       
-;                DEFB    25, 26, 27, 31, 32       
-;                DEFB    33, 37, 38, 39, 45       
-;                DEFB    16, 17, 18, 19, 20       
-;                DEFB    25, 26, 27, 31, 32       
-;                DEFB    33, 37, 38, 39, 45    
+;hsv:            DEFB    7
+;                DEFB    16, 17, 18, 19, 20
+;                DEFB    25, 26, 27, 31, 32
+;                DEFB    33, 37, 38, 39, 45
+;                DEFB    16, 17, 18, 19, 20
+;                DEFB    25, 26, 27, 31, 32
+;                DEFB    33, 37, 38, 39, 45
 
+; Bright near-black, dark far-out (original hand-tuned palette)
+;hsv:            DEFB    0
+;                DEFB    159, 117, 87, 87, 81
+;                DEFB    81, 51, 51, 45, 45
+;                DEFB    44, 44, 33, 33, 32
+;                DEFB    32, 27, 27, 26, 26
+;                DEFB    25, 25, 21, 20, 20
+;                DEFB    19, 19, 18, 18, 18
+
+; One-directional black -> navy -> blue -> cyan -> white (tried, rejected):
+; put white on indices 27-30, which turned out to be the fast-escaping
+; FAR-FIELD background covering most of the image - made the bulk of the
+; render a stark white field instead of the atmospheric dark one.
+;hsv:            DEFB    0
+;                DEFB    16, 17, 17, 18, 19
+;                DEFB    20, 20, 21, 27, 27
+;                DEFB    33, 33, 33, 39, 39
+;                DEFB    45, 45, 45, 51, 51
+;                DEFB    87, 87, 123, 123, 159
+;                DEFB    159, 195, 195, 231, 231
+
+; Symmetric "mountain" (tried, superseded): black at both ends, peaking
+; at white around index 15 - put the brightest color in the middle of
+; the escape-count range rather than at either extreme.
+;hsv:            DEFB    0
+;                DEFB    17, 18, 19, 20, 21
+;                DEFB    27, 33, 39, 39, 45
+;                DEFB    51, 87, 123, 195, 231
+;                DEFB    195, 123, 87, 51, 45
+;                DEFB    39, 39, 33, 27, 21
+;                DEFB    20, 19, 18, 17, 0
+
+; One-directional ramp: black at the far-field outer edge (index 30/29,
+; the fast-escaping background - "T" in the char table), dithering
+; through navy -> blue -> cyan, brightening all the way to white right at
+; the boundary (index 1, slowest-escaping/closest to the set), then a
+; SUDDEN hard cut to black at index 0 (the true interior - no fade, it
+; just isn't part of the gradient). Density weighted toward the low-
+; index/near-boundary end (indices 1-11 get the finest cyan/white steps)
+; since that's where "getting brighter right up to the bulb" is the
+; whole point; the far-field background (indices 24-30) is uninteresting
+; and can be coarse/flat near-black.
 hsv:            DEFB    0
-                DEFB    159, 117, 87, 87, 81
-                DEFB    81, 51, 51, 45, 45
-                DEFB    44, 44, 33, 33, 32
-                DEFB    32, 27, 27, 26, 26
-                DEFB    25, 25, 21, 20, 20
-                DEFB    19, 19, 18, 18, 18
+                DEFB    231, 231, 195, 195, 159
+                DEFB    159, 159, 123, 123, 87
+                DEFB    87, 51, 51, 45, 45
+                DEFB    45, 39, 39, 33, 33
+                DEFB    33, 27, 27, 21, 20
+                DEFB    19, 18, 18, 17, 16
 
 ; Character table - same shape/indexing as hsv above (index = iteration
 ; count at bailout: 0 = reached iteration_max without diverging, 1..30 =
@@ -922,7 +1312,6 @@ elapsedSt:      DEFM    'Time taken: '
                 DEFB    hbios_EOS
 
 crlfeos:        DEFB    cr, lf, hbios_EOS                              ; Carrage return, line feed, end of string
-ansifg:         DEFB    esc, sqBracket, 51, 56, 59, 53, 59, hbios_EOS  ; Foreground "esc[38;5;"
 cls:            DEFB    esc, sqBracket, 50, 74, hbios_EOS              ; Clear the screen "esc[2J"
         
                 END

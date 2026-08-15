@@ -34,9 +34,12 @@ measured), `rc2014_upload`/`rc2014_download` (XMODEM file transfer),
   once via `rc2014_download`) - if either ever goes missing from `H:`
   (has happened - see Gotchas below), restore from there with
   `rc2014_upload`.
-- **`J:`** - SD-backed, persistent. Where the "real" `MANDEL.ASM`/`.OBJ`/
-  `.COM`/`.SYM` live between sessions. Upload here when a result is worth
-  keeping.
+- **`J:`** - SD-backed, persistent. Where the "real" `MANDEL.ASM` lives
+  between sessions. Upload here (zipped, per below) when a result is worth
+  keeping. **Just the source** - don't bother round-tripping `.OBJ`/`.COM`/
+  `.SYM` through the host, they're one `ZAS`+`LINQ` away from `J:MANDEL.ASM`
+  whenever they're actually needed, and keeping them in sync on every
+  change is pure overhead.
 - **`B:`** - RAM disk (`MD0:0`), 344KB, volatile (cleared on power cycle
   only, not between commands). Use for iteration scratch work - assemble/
   link/test here to keep the SD card write-free during rapid iteration.
@@ -131,6 +134,18 @@ would actually solve this.
 
 ## Gotchas (cost real time to find - don't rediscover these)
 
+- **`ERA` prompts `All?` for confirmation on a wildcard erase** (e.g.
+  `ERA B:*.*`) and `rc2014_run_command` will report `timed_out` waiting
+  for a prompt that never comes back on its own. Docs say appending ` C`
+  (or `CONFIRM`) suppresses it, but on this build **it doesn't**: tested
+  both `ERA B:*.* C` and `ERA B:*.* Y` multiple times, every single
+  wildcard call still hung on `All?` regardless. (Single-file erases like
+  `ERA J:MANDEL.ASM C` returned instantly either way - but that's just
+  because CP/M `ERA` never confirms a non-wildcard erase in the first
+  place, C or no C; it wasn't the switch doing anything, and the `C?`
+  left in the output afterward is just unrecognized-argument echo.)
+  **Only reliable method**: let the wildcard call time out, then follow
+  up with `rc2014_send_text` sending `Y`.
 - **This specific `ZAS` build has at least two silent-failure modes**,
   neither reported as an error:
   1. `IF`/`ENDIF` (documented as a `COND`/`ENDC` synonym) silently
@@ -159,6 +174,19 @@ would actually solve this.
   `colorpixel`) toggles all pixel/color output for isolating compute time
   from serial-I/O time. Flip to `0`, rebuild, time both variants with the
   same `rc2014_run_command` call to split the two.
+- **HBIOS `CIOOUT` (function 0x01) silently rewrites `C` on this build**,
+  even though the RomWBW System Guide only documents `A` (status) as a
+  return value. Verified on real hardware with a poison-register probe:
+  `D`, `H`, `L`, and `B` all survive a `CIOOUT` call completely unchanged,
+  but `C` came back `81h` after being set to `80h` (the "current console"
+  alias) going in - almost certainly the alias getting resolved to a
+  concrete logical unit number as a side effect. Practical upshot: a
+  tight character-output loop can hoist `B` (the function code) outside
+  the loop and load it once, but `C` (device) must be reloaded every
+  single call - don't assume it's stable just because you didn't change
+  it. `D`/`H`/`L` being fully untouched means a buffer pointer or byte
+  count can live in any of them across `CIOOUT` calls with zero
+  save/restore, no `push`/`pop` and no `EXX` required.
 
 ## Working style on this project
 

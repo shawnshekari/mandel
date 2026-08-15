@@ -36,27 +36,48 @@ directly against each other.
 
 ### `mandel_z180.asm` - SC722 Z180 board (see file header for hardware detail)
 
-- Original downloaded `mandel.com` from J.B. Langston: 2:20 @ 18.4MHz
-- As of 04/10/2024: 45 seconds @ 18.4MHz
-- With no char output: 39 seconds @ 18.4MHz
-- With no char output: 25 seconds @ 36.8MHz, 1 mem wait state
+`charIn` (the ESC-abort check) has always run once per pixel here - never
+touched by the per-row-relocation optimization done on the Z80 fork
+below - and there's no `OUTPUT`-flag equivalent in this file; the "no
+char output" rows below were historical one-off measurements, not a
+toggleable build option.
+
+| Processor | Clock | OUTPUT | ESC check | Time | Notes |
+|---|---|---|---|---|---|
+| Z180 | 18.4MHz | 1 | per-pixel | 2:20 (140s) | Original downloaded `mandel.com` from J.B. Langston |
+| Z180 | 18.4MHz | 1 | per-pixel | 45s | As of 04/10/2024 |
+| Z180 | 18.4MHz | 0 | per-pixel | 39s | No char output |
+| Z180 | 36.8MHz | 0 | per-pixel | 25s | No char output, 1 mem wait state |
 
 ### `mandel_z80.asm` - RC2014 Pro (RCZ80_std), Z80 @ 7.372MHz, RomWBW/ZSDOS
 
 Measured on real hardware via the rc2014bridge MCP (`rc2014_run_command`,
 wall-clock send-to-prompt-return timing). The Z80 port has no hardware
-multiply, so `l_muls_32_16x16` is a software shift-add multiply instead -
-expect this to run meaningfully slower per-pixel than the Z180 original at
-a comparable clock speed.
+multiply, so `l_muls_32_16x16`/`square_16` are software shift-add
+multiplies instead - expect this to run meaningfully slower per-pixel
+than the Z180 original at a comparable clock speed. `OUTPUT` is the
+`COND OUTPUT` build flag (top of the file) that skips all pixel/color
+output to isolate compute time; `ESC check` is how often `charIn` polls
+for the abort key - per-pixel for the whole file until the relocation
+row below, per-row after.
 
-| Build | Time | Notes |
-|---|---|---|
-| Baseline (unrolled multiply, before hand optimization) | 45.09-45.13s | Two runs |
-| Baseline, `OUTPUT=0` (compute only, no serial output) | 41.82s | Serial I/O is only ~7% of runtime here - compute dominates |
-| + clear-carry-before-bit-test in `l_muls_32_16x16` | 44.36s | ~1.7% faster; see commit history for detail |
-| + hoist duplicate `pop bc` out of the exit branch | 44.38s | Within measurement noise (~0.07s expected, below wall-clock resolution here) |
-| + early bailout (check `z_0^2` alone, then combined, before the cross product) | 43.61s | ~3.3-3.7% below original baseline overall; see commit history for why the gain is smaller than the multiply-count reduction alone suggests |
-| + per-pixel character varies with iteration count (visual only, colors unchanged) | 43.61s | No measurable timing impact, three consecutive runs; see PLAN.md for detail |
+| Processor | Clock | OUTPUT | ESC check | Time | Commit | What changed |
+|---|---|---|---|---|---|---|
+| Z80 | 7.372MHz | 1 | per-pixel | 45.09-45.13s | `dbcc494` | Baseline (unrolled multiply, before hand optimization) - two runs |
+| Z80 | 7.372MHz | 0 | per-pixel | 41.82s | `dbcc494` | Baseline, compute only - serial I/O was only ~7% of runtime here at this point, compute dominated |
+| Z80 | 7.372MHz | 1 | per-pixel | 44.36s | `b1eeb7f` | + clear-carry-before-bit-test in `l_muls_32_16x16` - ~1.7% faster |
+| Z80 | 7.372MHz | 1 | per-pixel | 44.38s | `7ec2a68` | + hoist duplicate `pop bc` out of the exit branch - within measurement noise (~0.07s expected, below wall-clock resolution here) |
+| Z80 | 7.372MHz | 1 | per-pixel | 43.61s | `8f1cf73` | + early bailout (check `z_0^2` alone, then combined, before the cross product) - ~3.3-3.7% below original baseline overall; see commit history for why the gain is smaller than the multiply-count reduction alone suggests |
+| Z80 | 7.372MHz | 1 | per-pixel | 43.61s | `b89f9b5` | + per-pixel character varies with iteration count (visual only, colors unchanged) - no measurable timing impact, three consecutive runs; see PLAN.md for detail |
+| Z80 | 7.372MHz | 1 | per-pixel | 43.7s | `34588c7` | + symmetric black->white->black color palette (visual only, same lookup cost) - no measurable timing impact, data-table swap only; see PLAN.md for detail |
+| Z80 | 7.372MHz | 1 | per-pixel | 29.83-29.91s | `a6c5966` | + cardioid/period-2-bulb pre-check (skip interior pixels entirely) - ~32% faster than the 43.66-43.7s baseline, the biggest single win; verified byte-for-byte identical output, see PLAN.md for the two bugs found along the way |
+| Z80 | 7.372MHz | 1 | per-pixel | 29.9s | `7a8c5a5` | + one-directional palette, reversed (black at far-field, white at boundary, sudden black at interior) - no measurable timing impact, data-table swap only; see PLAN.md for detail |
+| Z80 | 7.372MHz | 1 | per-row | 28.8s | `74c7d92` | + ESC-key check moved from once per pixel to once per row - ~3.5% faster; `charIn` was dispatching an HBIOS status check ~120x/row for a key that's essentially never there; see PLAN.md for detail |
+| Z80 | 7.372MHz | 1 | per-row | 28.63s | `2bdc89e` | + per-row output buffer (`colorpixel`/`setcolor`/`printdec` append to a buffer, `flushLine` sends it in one pass) - flat vs. 28.8s (within noise); see PLAN.md for why |
+| Z80 | 7.372MHz | 0 | per-row | 25.53s | `2bdc89e` | Diagnostic re-check: compute only, same code as the row above with `OUTPUT` flipped for the measurement (never itself committed) - ~3.1s of output overhead remained, essentially the same *absolute* amount as the very first `OUTPUT=0` row - evidence the remaining bottleneck is UART transmission time, not the CPU-side call/register overhead those two changes targeted; see PLAN.md for detail |
+| Z80 | 7.372MHz | 1 | per-row | 27.63s | `8e64151` | + dedicated `square_16` routine for `z^2` (2 of 3 multiplies/iteration, plus all 3 cardioid/bulb pre-check squarings) - ~3.5% faster; skips the second operand's sign check/abs-value and the entire sign-restoration exit path, both unnecessary when squaring; verified against `x*x` across all 65536 signed 16-bit values before deploying, see PLAN.md for detail |
+
+(No commit column on the Z180 table below - its whole history predates this repo's git tracking; `dbcc494` is the only commit touching `mandel_z180.asm` at all, the one that split it out from the Z80 fork.)
 
 # Mandelbrot Set Generator for Z80 (CP/M) - Optimization Readme
 
