@@ -514,30 +514,56 @@ intact afterward. Committed.
 
 ## Backlog
 
-- **[bridge-coupled] RLE/custom codec for pixel output, decoded by
-  rc2014bridge** - user's idea, motivated directly by this session's
-  `OUTPUT=0` finding: the ~3.1s of output overhead left after both the
-  ESC-relocation and buffering work is essentially constant regardless of
-  CPU-side changes, strong evidence it's bounded by UART transmission
-  time rather than call/register overhead - meaning the only lever left
-  is reducing actual bytes sent, not instructions per byte. Real target
-  exists: captured renders show long uniform character runs (e.g. 40+
-  repeated `R`s or `0`s in a row) since colors are already deduped on
-  change but the character stream still emits one byte per pixel
-  regardless of repeats. Idea: some escape-byte + repeat-count encoding
-  (`Tx10`-style) emitted by `mandel_z80.asm`, expanded back to real
-  characters by `rc2014bridge` (which the user also owns/wrote) before
-  it reaches the terminal/capture. Ties the program to that specific
-  bridge, so should land as a genuinely separate source variant (like
-  `mandel_z180.asm` vs `mandel_z80.asm` already are) rather than a
-  `COND`-gated option in the main file - the two builds have permanently
-  different purposes (one stays plain-ANSI/portable, the other is
-  intentionally coupled to the bridge). Needs the actual encoding scheme
-  designed against real run-length distributions before implementing -
-  a naive "escape+count+char always" scheme would make single-char/no-
-  repeat runs *worse*, not better, so it needs a real cost-benefit check
-  (probably in Python against a captured render) before writing any Z80.
-  Not started.
+- **[bridge-coupled] Binary pixel-stream protocol for rc2014bridge,
+  spec finalized, implementation not started.** Motivated by this
+  session's `OUTPUT=0` finding: the ~3.1s of output overhead left after
+  both the ESC-relocation and buffering work is essentially constant
+  regardless of CPU-side changes, strong evidence it's bounded by UART
+  transmission time rather than call/register overhead - meaning the
+  only lever left is reducing actual bytes sent, not instructions per
+  byte. Evolved past a simple char-only RLE idea once we noticed
+  `chartable`/`hsv` are indexed by the *same* value (iteration count) -
+  color and character were never two independent things to encode, so
+  the design instead RLE-encodes the raw iteration count (0-30) directly
+  in a fixed-width `iiiiirrr` binary token (5-bit index, 3-bit run code,
+  extension byte for runs >7), with the receiving side (`rc2014bridge`)
+  owning all color/character rendering - including a move from
+  xterm-256-approximated ANSI colors to real RGB pixels drawn directly
+  via `pygame` (already the bridge's actual rendering layer), bypassing
+  the `pyte` character-grid path entirely for this mode. Verified against
+  real captured render data: beats both a plain escape-byte RLE scheme
+  and the same scheme without an extension byte, on both flat and
+  detail-heavy rows (~10-25% of raw size depending on row content, vs.
+  ~17-37% for the simpler schemes).
+
+  Full spec, palette (RGB derived from the current `hsv` table, not
+  invented), golden test vectors, and a Python reference encoder now live
+  in `protocol/` in this repo (`DESIGN.md`, `mandel_pixel_stream.yaml`,
+  `generate_test_vectors.py`), mirrored uncommitted into
+  `~/src/rc2014bridge/protocol/` so a separate agent can build the
+  bridge-side decoder/renderer against the same contract while this repo
+  builds the Z80-side encoder - **read `protocol/DESIGN.md` first**, it
+  covers the responsibility split, activation-mechanism open question,
+  and testing order (golden vectors -> round-trip -> Z80-vs-Python
+  cross-check -> real hardware last).
+
+  Protocol is deliberately board-agnostic - no RC2014/Z80-specific
+  assumptions - since a Z180 port later (hardware `MLT`, 36.8MHz vs. the
+  RC2014's 7.372MHz, see `mandel_z180.asm`) is a real possibility worth
+  not designing against. Not in scope for the initial build.
+
+  One honest calibration worth remembering before chasing a big
+  resolution increase to "show off detail": of the current 27.63s, only
+  ~3.1s is output - even eliminating all of it only funds a ~11% bump in
+  pixel count at the same wall-clock budget. A meaningfully higher-
+  resolution render is a compute-time question, not something this
+  protocol unlocks on its own (see `DESIGN.md`'s open questions).
+
+  New source variant needed on this side (`mandel_z80.asm` stays as-is;
+  something like `mandel_z80_pixelstream.asm` gets the new streaming
+  encoder) - `hsv`/`chartable`/`colorpixel`/`setcolor`/`printdec` all go
+  away under this protocol, replaced by a much smaller streaming RLE
+  encoder tracking `(last_index, run_count)` across pixels. Not started.
 - **[workflow] Keep a J: history of past .COM builds** - user wants each
   build worth keeping persisted to `J:` as `MANDELnn.COM` (`MANDEL01.COM`,
   `MANDEL02.COM`, ...) in order of progression, binary only, so they can
