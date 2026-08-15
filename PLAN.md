@@ -23,10 +23,21 @@ numbers and commit history for full detail on each):
 4. Cardioid/period-2-bulb pre-check before `iteration_loop` even starts -
    see below. **~32% faster: 43.66s -> 29.83-29.91s**, the biggest single
    win so far.
+5. ESC-key check moved from once per pixel to once per row (`charIn` was
+   being called ~120x/row for a key that's essentially never there) -
+   see below. **~3.5% faster: 29.83-29.91s -> 28.8s.**
 
-**Not yet decided:** what to tackle next. Precision reduction (drop
-`scale` from 256, shrinking the multiply routine itself) is the main
-candidate left on the table from the original optimization list.
+**In progress:** output buffering. Register-clobber probe (see below)
+confirmed `D`/`H`/`L`/`B` all survive an HBIOS `CIOOUT` call untouched on
+this build, so a per-row output buffer can use a register-resident
+pointer with zero save/restore - see the staged plan below. Stage 1
+(this ESC relocation) is done; stages 2-5 (buffer scaffolding, buffered
+`colorpixel`/`setcolor`/`showpixel`, `flushLine`, final verification) are
+next.
+
+**After that, not yet decided:** precision reduction (drop `scale` from
+256, shrinking the multiply routine itself) is the main candidate left on
+the table from the original optimization list.
 
 ### Done: cardioid/period-2-bulb pre-check skips interior pixels entirely
 
@@ -173,6 +184,46 @@ ramp, giving the sudden cutoff into the interior. Confirmed on hardware:
 29.9s x2, matching the cardioid-optimized baseline exactly (pure
 data-table swap, no perf impact) - user confirmed the render looks
 right.
+
+### Done: ESC check moved from per-pixel to per-row, plus a register-clobber probe for the buffering work ahead
+
+User wants to batch per-pixel serial output into a per-row buffer next
+(motivation: `printCh` pays `push bc/de/hl` + an HBIOS dispatch on every
+single byte, and `charIn`'s ESC check was doing the same *every pixel*
+just to ask "any key waiting?", almost always answered no). Two pieces
+landed this round:
+
+**1. Register-clobber probe.** Before designing a buffered write loop,
+needed to know what HBIOS's `CIOOUT` (function 0x01) actually clobbers -
+the RomWBW System Guide only documents `A` (status) as a return value,
+and `printCh`'s existing blanket `push bc/de/hl` doesn't tell you whether
+that's necessary or just defensive. Wrote a throwaway probe
+(`CIOTEST.ASM`, not committed) that poisons `D`/`H`/`L` with recognizable
+values, makes one real `CIOOUT` call, and prints what survives. Result on
+real hardware: `D`, `H`, `L`, and `B` (the function code) all come back
+completely unchanged; only `A` changes (status) and, surprisingly, `C`
+(the device number) - `0x80` (the "current console" alias) came back as
+`0x81` after one call, undocumented anywhere. See AGENT.md's gotchas
+section for the full writeup. Practical upshot for the buffering work:
+a buffer pointer/count can live in `HL` (or similar) across `CIOOUT`
+calls with *zero* protection - no `push`/`pop`, no `EXX` - and `B` can be
+loaded once outside a send loop, but `C` must be reloaded every call.
+
+**2. ESC-check relocation.** Moved the `charIn` call from `inner_loop`
+(top of the per-pixel loop, ~120x/row at the current `x_step`) to run
+once per row instead, right after `x` resets in `outer_loop`. Renamed
+the old `inner_loop2` (the actual per-pixel x-bounds-check top) to
+`inner_loop`, and updated `charIn`'s exit jump to match - purely a
+control-flow change, doesn't touch `colorpixel`/`setcolor`/`showpixel`/
+the `hsv`/`chartable` lookups or any iteration/cardioid math, so a full
+byte-diff against baseline was skipped as low-value here (verified by
+code inspection that the change is structurally disjoint from anything
+that could alter pixel output, plus the completed render looked
+structurally correct). User confirmed ESC still aborts a live render
+correctly by testing it interactively.
+
+**Measured: 28.8s, down from the 29.83-29.91s cardioid/palette
+baseline - ~3.5% faster.**
 
 ### Tried and reverted: magnitude pre-check before the multiply (negative result)
 

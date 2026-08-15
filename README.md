@@ -60,6 +60,7 @@ a comparable clock speed.
 | + symmetric black->white->black color palette (visual only, same lookup cost) | 43.7s | No measurable timing impact - data-table swap only; see PLAN.md for detail |
 | + cardioid/period-2-bulb pre-check (skip interior pixels entirely) | 29.83-29.91s | ~32% faster than the 43.66-43.7s baseline - the biggest single win; verified byte-for-byte identical output, see PLAN.md for the two bugs found along the way |
 | + one-directional palette, reversed (black at far-field, white at boundary, sudden black at interior) | 29.9s | No measurable timing impact - data-table swap only; see PLAN.md for detail |
+| + ESC-key check moved from once per pixel to once per row | 28.8s | ~3.5% faster - `charIn` was dispatching an HBIOS status check ~120x/row for a key that's essentially never there; see PLAN.md for detail |
 
 # Mandelbrot Set Generator for Z80 (CP/M) - Optimization Readme
 

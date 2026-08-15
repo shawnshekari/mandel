@@ -174,6 +174,19 @@ would actually solve this.
   `colorpixel`) toggles all pixel/color output for isolating compute time
   from serial-I/O time. Flip to `0`, rebuild, time both variants with the
   same `rc2014_run_command` call to split the two.
+- **HBIOS `CIOOUT` (function 0x01) silently rewrites `C` on this build**,
+  even though the RomWBW System Guide only documents `A` (status) as a
+  return value. Verified on real hardware with a poison-register probe:
+  `D`, `H`, `L`, and `B` all survive a `CIOOUT` call completely unchanged,
+  but `C` came back `81h` after being set to `80h` (the "current console"
+  alias) going in - almost certainly the alias getting resolved to a
+  concrete logical unit number as a side effect. Practical upshot: a
+  tight character-output loop can hoist `B` (the function code) outside
+  the loop and load it once, but `C` (device) must be reloaded every
+  single call - don't assume it's stable just because you didn't change
+  it. `D`/`H`/`L` being fully untouched means a buffer pointer or byte
+  count can live in any of them across `CIOOUT` calls with zero
+  save/restore, no `push`/`pop` and no `EXX` required.
 
 ## Working style on this project
 

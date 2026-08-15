@@ -70,9 +70,10 @@ outer_loop:
 
         ld      hl, (x_start)
         ld      (x), hl
-inner_loop:     
-        jp      charIn
-inner_loop2:
+        jp      charIn                  ; ESC check once per row, not once per
+                                         ; pixel - charInEnd falls back into
+                                         ; inner_loop below either way
+inner_loop:
         ld      hl, (x_end)
         ld      de, (x)
         and     a
@@ -801,7 +802,7 @@ charInEnd:
         pop     hl
         pop     de
         pop     bc
-        jp      inner_loop2             ; back to work
+        jp      inner_loop              ; back to work
 
 ;------------------------------------------------------------------------------------------------------------------------------
 ; Calculate the run time based on the start and end date/time buffers
