@@ -996,22 +996,34 @@ elapsedMins:    DEFB    0
 ;                DEFB    87, 87, 123, 123, 159
 ;                DEFB    159, 195, 195, 231, 231
 
-; Symmetric "mountain": black at both ends (index 0 = interior that never
-; diverges, index 30 = far-field points that diverge instantly - both
-; visually uninteresting), climbing navy -> blue -> cyan -> white and back
-; down again, peaking at white around index 15. Puts the brightest color
-; on the boundary-detail band in the middle of the escape-count range
-; instead of on the huge, uninteresting far-field background. Density is
-; still weighted toward both black ends (fine navy steps right next to
-; black on either side) since that's where escape counts change fastest
-; pixel-to-pixel.
+; Symmetric "mountain" (tried, superseded): black at both ends, peaking
+; at white around index 15 - put the brightest color in the middle of
+; the escape-count range rather than at either extreme.
+;hsv:            DEFB    0
+;                DEFB    17, 18, 19, 20, 21
+;                DEFB    27, 33, 39, 39, 45
+;                DEFB    51, 87, 123, 195, 231
+;                DEFB    195, 123, 87, 51, 45
+;                DEFB    39, 39, 33, 27, 21
+;                DEFB    20, 19, 18, 17, 0
+
+; One-directional ramp: black at the far-field outer edge (index 30/29,
+; the fast-escaping background - "T" in the char table), dithering
+; through navy -> blue -> cyan, brightening all the way to white right at
+; the boundary (index 1, slowest-escaping/closest to the set), then a
+; SUDDEN hard cut to black at index 0 (the true interior - no fade, it
+; just isn't part of the gradient). Density weighted toward the low-
+; index/near-boundary end (indices 1-11 get the finest cyan/white steps)
+; since that's where "getting brighter right up to the bulb" is the
+; whole point; the far-field background (indices 24-30) is uninteresting
+; and can be coarse/flat near-black.
 hsv:            DEFB    0
-                DEFB    17, 18, 19, 20, 21
-                DEFB    27, 33, 39, 39, 45
-                DEFB    51, 87, 123, 195, 231
-                DEFB    195, 123, 87, 51, 45
-                DEFB    39, 39, 33, 27, 21
-                DEFB    20, 19, 18, 17, 0
+                DEFB    231, 231, 195, 195, 159
+                DEFB    159, 159, 123, 123, 87
+                DEFB    87, 51, 51, 45, 45
+                DEFB    45, 39, 39, 33, 33
+                DEFB    33, 27, 27, 21, 20
+                DEFB    19, 18, 18, 17, 16
 
 ; Character table - same shape/indexing as hsv above (index = iteration
 ; count at bailout: 0 = reached iteration_max without diverging, 1..30 =

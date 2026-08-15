@@ -59,6 +59,7 @@ a comparable clock speed.
 | + per-pixel character varies with iteration count (visual only, colors unchanged) | 43.61s | No measurable timing impact, three consecutive runs; see PLAN.md for detail |
 | + symmetric black->white->black color palette (visual only, same lookup cost) | 43.7s | No measurable timing impact - data-table swap only; see PLAN.md for detail |
 | + cardioid/period-2-bulb pre-check (skip interior pixels entirely) | 29.83-29.91s | ~32% faster than the 43.66-43.7s baseline - the biggest single win; verified byte-for-byte identical output, see PLAN.md for the two bugs found along the way |
+| + one-directional palette, reversed (black at far-field, white at boundary, sudden black at interior) | 29.9s | No measurable timing impact - data-table swap only; see PLAN.md for detail |
 
 # Mandelbrot Set Generator for Z80 (CP/M) - Optimization Readme
 

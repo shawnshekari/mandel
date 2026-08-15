@@ -150,6 +150,30 @@ regardless of what values are in the table).
 Old one-directional attempt is left commented out above the active table
 in `mandel_z80.asm`, same convention as the other retired palettes there.
 
+### Done: reworked the palette again - one-directional, but the other way round
+
+User revisited this after the cardioid pre-check landed: wanted black
+around the *outside* (the outermost `T`/far-field background), dithering
+through blue then brightening to white right at the boundary (closest to
+diverging), then a **sudden** hard cut to black exactly at index 0 (the
+true interior/bulb) - not a gradual fade into it. This is the mirror
+image of the *first* (rejected) one-directional attempt: that one put
+white at the far-field end (index 30) and black at the interior (index
+0); this one puts black at the far-field end (index ~29-30) and white
+near the boundary (index ~1), with index 0 handled as a separate, sudden
+value rather than the start/end of the ramp.
+
+Built the same way as the symmetric palette (walk the 6x6x6 cube's edge
+path, black->blue->cyan->white) but as a single index-30-down-to-1 ramp,
+density-weighted toward the *low*-index/near-boundary end (indices 1-11
+get the finest cyan/white steps, since "getting brighter right up to the
+bulb" is the whole point) with the far-field end (indices 24-30)
+coarse/flat near-black. `hsv[0]` stays pure black, disconnected from the
+ramp, giving the sudden cutoff into the interior. Confirmed on hardware:
+29.9s x2, matching the cardioid-optimized baseline exactly (pure
+data-table swap, no perf impact) - user confirmed the render looks
+right.
+
 ### Tried and reverted: magnitude pre-check before the multiply (negative result)
 
 Idea: before each of the two `l_muls_32_16x16` calls in `iteration_loop`,

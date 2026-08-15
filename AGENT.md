@@ -137,12 +137,15 @@ would actually solve this.
 - **`ERA` prompts `All?` for confirmation on a wildcard erase** (e.g.
   `ERA B:*.*`) and `rc2014_run_command` will report `timed_out` waiting
   for a prompt that never comes back on its own. Docs say appending ` C`
-  (or `CONFIRM`) suppresses it - e.g. `ERA B:*.* C` - and it *did* work at
-  least once this session (command returned in under a second, no
-  prompt), but also **timed out anyway on a later, identical-looking
-  call** in the same session - not understood why, don't rely on it.
-  Reliable fallback: follow up with `rc2014_send_text` sending `Y`
-  whenever the call times out waiting on `All?`.
+  (or `CONFIRM`) suppresses it, but on this build **it doesn't**: tested
+  both `ERA B:*.* C` and `ERA B:*.* Y` multiple times, every single
+  wildcard call still hung on `All?` regardless. (Single-file erases like
+  `ERA J:MANDEL.ASM C` returned instantly either way - but that's just
+  because CP/M `ERA` never confirms a non-wildcard erase in the first
+  place, C or no C; it wasn't the switch doing anything, and the `C?`
+  left in the output afterward is just unrecognized-argument echo.)
+  **Only reliable method**: let the wildcard call time out, then follow
+  up with `rc2014_send_text` sending `Y`.
 - **This specific `ZAS` build has at least two silent-failure modes**,
   neither reported as an error:
   1. `IF`/`ENDIF` (documented as a `COND`/`ENDC` synonym) silently
