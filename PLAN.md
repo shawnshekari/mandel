@@ -514,6 +514,30 @@ intact afterward. Committed.
 
 ## Backlog
 
+- **[bridge-coupled] RLE/custom codec for pixel output, decoded by
+  rc2014bridge** - user's idea, motivated directly by this session's
+  `OUTPUT=0` finding: the ~3.1s of output overhead left after both the
+  ESC-relocation and buffering work is essentially constant regardless of
+  CPU-side changes, strong evidence it's bounded by UART transmission
+  time rather than call/register overhead - meaning the only lever left
+  is reducing actual bytes sent, not instructions per byte. Real target
+  exists: captured renders show long uniform character runs (e.g. 40+
+  repeated `R`s or `0`s in a row) since colors are already deduped on
+  change but the character stream still emits one byte per pixel
+  regardless of repeats. Idea: some escape-byte + repeat-count encoding
+  (`Tx10`-style) emitted by `mandel_z80.asm`, expanded back to real
+  characters by `rc2014bridge` (which the user also owns/wrote) before
+  it reaches the terminal/capture. Ties the program to that specific
+  bridge, so should land as a genuinely separate source variant (like
+  `mandel_z180.asm` vs `mandel_z80.asm` already are) rather than a
+  `COND`-gated option in the main file - the two builds have permanently
+  different purposes (one stays plain-ANSI/portable, the other is
+  intentionally coupled to the bridge). Needs the actual encoding scheme
+  designed against real run-length distributions before implementing -
+  a naive "escape+count+char always" scheme would make single-char/no-
+  repeat runs *worse*, not better, so it needs a real cost-benefit check
+  (probably in Python against a captured render) before writing any Z80.
+  Not started.
 - **[workflow] Keep a J: history of past .COM builds** - user wants each
   build worth keeping persisted to `J:` as `MANDELnn.COM` (`MANDEL01.COM`,
   `MANDEL02.COM`, ...) in order of progression, binary only, so they can
