@@ -79,6 +79,88 @@ inner_loop2:
         sbc     hl, de
         jp      m, inner_loop_end
 
+        ; Cheap pre-check before the main loop even starts: is this pixel
+        ; provably INSIDE the set (period-2 bulb or main cardioid)? Interior
+        ; points are the single biggest cost in this program - they never
+        ; trigger early bailout, so each one pays for the full iteration_max
+        ; budget (30 x 3 multiplies). A handful of multiplies up front to
+        ; skip that entirely is a much better trade than the earlier
+        ; magnitude pre-check (reverted - see PLAN.md): that one saved at
+        ; most a single multiply on a hit; this one can save ~90.
+        ;
+        ; All in scale-256 fixed point, same "square via l_muls_32_16x16
+        ; then >>8" trick used throughout iteration_loop (a raw value
+        ; squared comes back scaled by 65536; >>8 renormalizes a squared
+        ; quantity to scale 256, matching a real threshold T as T*256).
+        ; Assumes coordinates stay within this file's default range
+        ; (roughly -2..1 x, -1.25..1.25 y) - like the rest of the fixed-
+        ; point math here, larger ranges risk overflowing the 16-bit
+        ; intermediate sums/products.
+        ld      hl, (y)                 ; cy2_scale256 = (Cy^2) at scale 256
+        ld      d, h                    ; - shared by both checks below
+        ld      e, l
+        call    l_muls_32_16x16
+        ld      l, h
+        ld      h, e
+        ld      (cy2_scale256), hl
+
+        ld      hl, (x)                 ; Period-2 bulb: (Cx+1)^2+Cy^2 <= 1/16
+        ld      bc, scale               ; -> at scale 256: (cx+256)^2>>8 + cy2
+        add     hl, bc                  ; <= 16, i.e. sum < 17 - tightened to
+        ld      d, h                    ; < 14: each of the two >>8 squaring
+        ld      e, l                    ; steps floor-rounds down by up to
+        call    l_muls_32_16x16         ; just under 1, so the computed sum
+        ld      l, h                    ; can undershoot the true value by up
+        ld      h, e                    ; to ~2 - margin of 3 verified by
+        ld      de, (cy2_scale256)      ; brute-force check against exact
+        add     hl, de                  ; float math across the full render
+        ld      bc, 14                  ; range plus a wide margin: 0 false
+        and     a                       ; positives (see PLAN.md)
+        sbc     hl, bc
+        jp      C, mark_interior
+
+        ld      hl, (x)                 ; Main cardioid: q=(Cx-0.25)^2+Cy^2;
+        ld      bc, scale/4             ; q*(q+(Cx-0.25)) <= Cy^2/4. b_raw =
+        and     a                       ; cx-64 (0.25*scale); q_scale256 =
+        sbc     hl, bc                  ; (b_raw^2>>8) + cy2_scale256
+        push    hl                      ; save b_raw across the call
+        ld      d, h
+        ld      e, l
+        call    l_muls_32_16x16
+        ld      l, h
+        ld      h, e
+        ld      de, (cy2_scale256)
+        add     hl, de                  ; hl = q_scale256
+        pop     bc                      ; bc = b_raw
+        ld      d, h                    ; de = q_scale256 (multiplicand 2)
+        ld      e, l
+        add     hl, bc                  ; hl = q_scale256+b_raw (multiplicand 1)
+        call    l_muls_32_16x16         ; hl:de = q*(q+b_raw), scale 65536
+        ld      l, h
+        ld      h, e                    ; hl = LHS at scale 256
+        ld      de, (cy2_scale256)
+        srl     d                       ; de = cy2_scale256/4 = RHS at scale
+        rr      e                       ; 256 (unsigned shift is fine - a
+        srl     d                       ; square>>8 is always >= 0)
+        rr      e
+        dec     de                      ; <= test: LHS < RHS+1, tightened to
+                                         ; < RHS-1 (3 chained >>8/floor steps
+                                         ; this time - see bulb check above
+                                         ; for why a margin is needed; this
+                                         ; one's margin verified the same way
+        and     a
+        sbc     hl, de                  ; LHS can be negative here (unlike the
+        jp      M, mark_interior        ; bulb sum, always >= 0) - jp M tests
+                                         ; the sign flag for a true SIGNED
+                                         ; "<0" test. jp C would be wrong: it
+                                         ; reads the UNSIGNED borrow, and RHS-1
+                                         ; wraps to 0xFFFF when RHS=0 (near
+                                         ; Cy=0), making "hl unsigned< 0xFFFF"
+                                         ; true for nearly everything - this
+                                         ; was a real bug, caught by the user
+                                         ; from a wrongly-solid-black band
+                                         ; across several rows near the center
+
         ld      hl, 0
         ld      (z_0), hl
         ld      (z_1), hl
@@ -167,6 +249,13 @@ iteration_loop:
         pop     bc                      ; Get iteration counter
         djnz    iteration_loop          ; We might fall through!
         jr      iteration_end
+
+mark_interior:
+        ld      b, 0                    ; provably inside the set (cardioid/bulb
+        jp      iteration_end           ; pre-check) - same as naturally running
+                                         ; the full iteration budget without ever
+                                         ; diverging, so use the same b=0 color/
+                                         ; char index a normal exhaustion gets
 
 bailout:
         pop     bc                      ; Get iteration counter (unchanged)
@@ -840,7 +929,8 @@ y_end:          DEFW    5 * scale / 4   ; Default 5
 y_step:         DEFW    scale / 20      ; Default 60
 z_0:            DEFW    0
 z_1:            DEFW    0
-scratch_0:      DEFW    0
+cy2_scale256:   DEFW    0               ; Cy^2 at scale 256, used by the
+                                         ; cardioid/bulb pre-check above
 z_0_square_high: DEFW    0
 z_0_square_low:  DEFW    0
 z_1_square_high: DEFW    0

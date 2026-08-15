@@ -134,6 +134,15 @@ would actually solve this.
 
 ## Gotchas (cost real time to find - don't rediscover these)
 
+- **`ERA` prompts `All?` for confirmation on a wildcard erase** (e.g.
+  `ERA B:*.*`) and `rc2014_run_command` will report `timed_out` waiting
+  for a prompt that never comes back on its own. Docs say appending ` C`
+  (or `CONFIRM`) suppresses it - e.g. `ERA B:*.* C` - and it *did* work at
+  least once this session (command returned in under a second, no
+  prompt), but also **timed out anyway on a later, identical-looking
+  call** in the same session - not understood why, don't rely on it.
+  Reliable fallback: follow up with `rc2014_send_text` sending `Y`
+  whenever the call times out waiting on `All?`.
 - **This specific `ZAS` build has at least two silent-failure modes**,
   neither reported as an error:
   1. `IF`/`ENDIF` (documented as a `COND`/`ENDC` synonym) silently

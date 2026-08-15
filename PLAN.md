@@ -7,7 +7,7 @@ and backlog work only.
 
 ## Current status
 
-Branch `z80-optimization`, all committed. Three real optimizations
+Branch `z80-optimization`, all committed. Four real optimizations
 measured on real hardware so far (see README's Timings table for exact
 numbers and commit history for full detail on each):
 1. Clear carry before bit-test in `l_muls_32_16x16` (~1.7% faster)
@@ -20,10 +20,72 @@ numbers and commit history for full detail on each):
    two prior optimizations). **Confirmed true current baseline: 43.61-
    43.62s** (re-measured fresh from git HEAD this session after
    discovering the on-device `J:MANDEL.COM` had gone stale - see below).
+4. Cardioid/period-2-bulb pre-check before `iteration_loop` even starts -
+   see below. **~32% faster: 43.66s -> 29.83-29.91s**, the biggest single
+   win so far.
 
 **Not yet decided:** what to tackle next. Precision reduction (drop
 `scale` from 256, shrinking the multiply routine itself) is the main
 candidate left on the table from the original optimization list.
+
+### Done: cardioid/period-2-bulb pre-check skips interior pixels entirely
+
+User's idea: points inside the main cardioid or period-2 bulb never
+diverge, so they're guaranteed to burn the *entire* `iteration_max`
+budget (30 iterations x 3 multiplies each, ~90 multiplies) with zero
+early exit - by far the most expensive pixels in the image. A cheap
+test *before* `iteration_loop` starts (3-4 multiplies, worst case) can
+identify them and skip straight to the interior color/char, the same way
+a natural full-budget exhaustion would.
+
+Formulas (real-valued): period-2 bulb: `(Cx+1)^2 + Cy^2 <= 1/16`. Main
+cardioid: `q=(Cx-0.25)^2+Cy^2; q*(q+(Cx-0.25)) <= Cy^2/4`. Translated to
+this program's scale-256 fixed point using the same "square via
+`l_muls_32_16x16` then `>>8`" trick already used in `iteration_loop`
+(raw value squared comes back scaled by 65536; `>>8` renormalizes to
+scale 256). New `cy2_scale256` variable (renamed from an unused
+`scratch_0`) holds `Cy^2` once per pixel, shared by both checks. On a
+hit, `mark_interior:` sets `b=0` and jumps straight to `iteration_end` -
+identical to what natural loop exhaustion produces.
+
+**Two real bugs found and fixed before trusting this, both via measuring
+on real hardware rather than assuming the math translation was right:**
+
+1. **Threshold rounding (found via Python brute-force, before ever
+   touching hardware).** Each `>>8` squaring step floor-rounds down,
+   so a naive direct translation of the formulas gave **55 false
+   positives** (points marked interior that truly aren't) out of 6966
+   pixels when checked against exact floating-point math across the full
+   render grid - a real visible bug, since misclassifying a boundary
+   pixel as interior paints over real detail. Fixed by tightening both
+   thresholds with a margin (bulb: `17`->`14`; cardioid: `RHS+1`->`RHS-1`)
+   sized via brute-force search against exact float math across a *dense*
+   grid (every integer raw coordinate, not just the actual pixel stride) -
+   the coarser pixel-stride grid alone hid additional false positives that
+   only showed up at finer resolution. Zero false positives confirmed
+   across a generously wide coordinate range beyond the actual render
+   bounds.
+
+2. **`jp C` vs `jp M` (found by the user from a screenshot - a wrongly
+   solid-black horizontal band spanning ~5 rows near the vertical
+   center).** The cardioid check's final comparison can legitimately go
+   negative (unlike the bulb sum, which is always >= 0), and `SBC HL,DE`'s
+   **carry flag reflects an unsigned borrow, not a signed comparison**.
+   Near `Cy=0` the threshold value underflowed `dec de` to `0xFFFF`
+   (correct as a signed -1, but as an *unsigned* value that's 65535), so
+   `jp C` (unsigned "less than") was true for nearly every pixel in those
+   rows. The register *value* after `SBC` was always the correct signed
+   difference - only the flag test was wrong. Fixed by testing the sign
+   flag (`jp M`, true difference < 0) instead of carry. This is a sharp
+   general lesson for any future signed 16-bit comparison on Z80: `SBC`'s
+   carry is unsigned-only; use the sign flag (or overflow+sign together)
+   for signed comparisons, and don't reach for `jp C`/`jp NC` out of habit
+   from the rest of this file's mostly-non-negative comparisons.
+
+**Verified correct after both fixes**: stripped-ANSI output diffed
+byte-for-byte identical against a freshly-rebuilt true baseline (same
+git HEAD source, pre-cardioid) - confirms the optimization changes
+*only* performance, never a single rendered pixel.
 
 ### Done: per-pixel character now varies with iteration count (visual, not perf)
 
@@ -246,6 +308,12 @@ intact afterward. Committed.
 
 ## Backlog
 
+- **[workflow] Keep a J: history of past .COM builds** - user wants each
+  build worth keeping persisted to `J:` as `MANDELnn.COM` (`MANDEL01.COM`,
+  `MANDEL02.COM`, ...) in order of progression, binary only, so they can
+  re-run any past version themselves on the physical device without going
+  through the host. Not done yet - current convention only keeps the
+  latest source at `J:MANDEL.ASM` (see AGENT.md).
 - ~~Test `UNZIP.COM` / source compression~~ **Done, validated, real win.**
   `UNZIP.COM` (`UNZIPZ 0.4-1 - SC`, from the RomWBW repo, sitting
   untracked in this repo pending a licensing decision - same provenance
