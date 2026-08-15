@@ -104,9 +104,7 @@ inner_loop:
         ; point math here, larger ranges risk overflowing the 16-bit
         ; intermediate sums/products.
         ld      hl, (y)                 ; cy2_scale256 = (Cy^2) at scale 256
-        ld      d, h                    ; - shared by both checks below
-        ld      e, l
-        call    l_muls_32_16x16
+        call    square_16               ; - shared by both checks below
         ld      l, h
         ld      h, e
         ld      (cy2_scale256), hl
@@ -114,9 +112,9 @@ inner_loop:
         ld      hl, (x)                 ; Period-2 bulb: (Cx+1)^2+Cy^2 <= 1/16
         ld      bc, scale               ; -> at scale 256: (cx+256)^2>>8 + cy2
         add     hl, bc                  ; <= 16, i.e. sum < 17 - tightened to
-        ld      d, h                    ; < 14: each of the two >>8 squaring
-        ld      e, l                    ; steps floor-rounds down by up to
-        call    l_muls_32_16x16         ; just under 1, so the computed sum
+        call    square_16               ; < 14: each of the two >>8 squaring
+                                         ; steps floor-rounds down by up to
+                                         ; just under 1, so the computed sum
         ld      l, h                    ; can undershoot the true value by up
         ld      h, e                    ; to ~2 - margin of 3 verified by
         ld      de, (cy2_scale256)      ; brute-force check against exact
@@ -131,9 +129,7 @@ inner_loop:
         and     a                       ; cx-64 (0.25*scale); q_scale256 =
         sbc     hl, bc                  ; (b_raw^2>>8) + cy2_scale256
         push    hl                      ; save b_raw across the call
-        ld      d, h
-        ld      e, l
-        call    l_muls_32_16x16
+        call    square_16
         ld      l, h
         ld      h, e
         ld      de, (cy2_scale256)
@@ -178,9 +174,9 @@ iteration_loop:
         push    bc
 
         ld      hl, (z_0)               ; Compute DE HL = z_0 * z_0 first -
-        ld      d, h                    ; check it alone before doing any
-        ld      e, l                    ; more work: z_1^2 >= 0 always, so
-        call    l_muls_32_16x16         ; if z_0^2 alone already diverges,
+        call    square_16               ; check it alone before doing any
+                                         ; more work: z_1^2 >= 0 always, so
+                                         ; if z_0^2 alone already diverges,
         ld      (z_0_square_low), hl    ; the sum will too - skip z_1^2 and
         ld      (z_0_square_high), de   ; the cross product entirely
 
@@ -194,9 +190,7 @@ iteration_loop:
                                          ; away here
 
         ld      hl, (z_1)               ; Compute DE HL = z_1 * z_1
-        ld      d, h
-        ld      e, l
-        call    l_muls_32_16x16
+        call    square_16
         ld      (z_1_square_low), hl    ; z_1 ** 2 is needed later again
         ld      (z_1_square_high), de
 
@@ -682,6 +676,194 @@ l_mul16_noadd:
     ret         NZ
     inc         de
     ret
+
+   ; Square a signed 16-bit value into a 32-bit product (always
+   ; non-negative). Purpose-built alternative to l_muls_32_16x16 for the
+   ; x*x case: since both operands are identical, only needs one sign
+   ; check/abs-value instead of two, and the result's sign is always
+   ; positive so the entire pop/xor/negate exit path above is
+   ; unnecessary - falls straight through to ex de,hl/ret instead. The
+   ; 16-step shift-add conveyor itself is unchanged from
+   ; l_muls_32_16x16, just duplicated here with unique labels (sq_mulN_
+   ; noadd instead of l_mulN_noadd) so the two routines don't collide -
+   ; kept unrolled for the same reason the original is (hottest code in
+   ; the program), and duplicated rather than shared via a second call/
+   ; ret so this doesn't add call overhead back into either routine.
+   ;
+   ; enter : hl = 16-bit signed value to square
+   ; exit  : hl = low 16 bits, de = high 16 bits of the product (same
+   ;         convention as l_muls_32_16x16, so existing call sites'
+   ;         >>8 renormalization trick - "ld l,h / ld h,e" - is unchanged)
+   ; uses  : af, bc, de, hl
+
+square_16:
+    bit         7,h
+    jr          z,sq_pos_hl     ; take absolute value once, not twice
+
+    ld          a,l
+    cpl
+    ld          l,a
+    ld          a,h
+    cpl
+    ld          h,a
+    inc         hl
+
+sq_pos_hl:
+    ld          b,h             ; bc = |value| (fixed addend)
+    ld          c,l
+    ld          d,h             ; de = |value| (shifting multiplier,
+    ld          e,l             ; consumed a bit at a time)
+    ld          hl,0            ; hl = product accumulator, starts at 0
+
+    or         a
+    bit         0,e             ; bit 1 of 16
+    jr         z,sq_mul1_noadd
+    add         hl,bc
+sq_mul1_noadd:
+    rr         h
+    rr         l
+    rr         d
+    rr         e
+    or         a
+    bit         0,e             ; bit 2 of 16
+    jr         z,sq_mul2_noadd
+    add         hl,bc
+sq_mul2_noadd:
+    rr         h
+    rr         l
+    rr         d
+    rr         e
+    or         a
+    bit         0,e             ; bit 3 of 16
+    jr         z,sq_mul3_noadd
+    add         hl,bc
+sq_mul3_noadd:
+    rr         h
+    rr         l
+    rr         d
+    rr         e
+    or         a
+    bit         0,e             ; bit 4 of 16
+    jr         z,sq_mul4_noadd
+    add         hl,bc
+sq_mul4_noadd:
+    rr         h
+    rr         l
+    rr         d
+    rr         e
+    or         a
+    bit         0,e             ; bit 5 of 16
+    jr         z,sq_mul5_noadd
+    add         hl,bc
+sq_mul5_noadd:
+    rr         h
+    rr         l
+    rr         d
+    rr         e
+    or         a
+    bit         0,e             ; bit 6 of 16
+    jr         z,sq_mul6_noadd
+    add         hl,bc
+sq_mul6_noadd:
+    rr         h
+    rr         l
+    rr         d
+    rr         e
+    or         a
+    bit         0,e             ; bit 7 of 16
+    jr         z,sq_mul7_noadd
+    add         hl,bc
+sq_mul7_noadd:
+    rr         h
+    rr         l
+    rr         d
+    rr         e
+    or         a
+    bit         0,e             ; bit 8 of 16
+    jr         z,sq_mul8_noadd
+    add         hl,bc
+sq_mul8_noadd:
+    rr         h
+    rr         l
+    rr         d
+    rr         e
+    or         a
+    bit         0,e             ; bit 9 of 16
+    jr         z,sq_mul9_noadd
+    add         hl,bc
+sq_mul9_noadd:
+    rr         h
+    rr         l
+    rr         d
+    rr         e
+    or         a
+    bit         0,e             ; bit 10 of 16
+    jr         z,sq_mul10_noadd
+    add         hl,bc
+sq_mul10_noadd:
+    rr         h
+    rr         l
+    rr         d
+    rr         e
+    or         a
+    bit         0,e             ; bit 11 of 16
+    jr         z,sq_mul11_noadd
+    add         hl,bc
+sq_mul11_noadd:
+    rr         h
+    rr         l
+    rr         d
+    rr         e
+    or         a
+    bit         0,e             ; bit 12 of 16
+    jr         z,sq_mul12_noadd
+    add         hl,bc
+sq_mul12_noadd:
+    rr         h
+    rr         l
+    rr         d
+    rr         e
+    or         a
+    bit         0,e             ; bit 13 of 16
+    jr         z,sq_mul13_noadd
+    add         hl,bc
+sq_mul13_noadd:
+    rr         h
+    rr         l
+    rr         d
+    rr         e
+    or         a
+    bit         0,e             ; bit 14 of 16
+    jr         z,sq_mul14_noadd
+    add         hl,bc
+sq_mul14_noadd:
+    rr         h
+    rr         l
+    rr         d
+    rr         e
+    or         a
+    bit         0,e             ; bit 15 of 16
+    jr         z,sq_mul15_noadd
+    add         hl,bc
+sq_mul15_noadd:
+    rr         h
+    rr         l
+    rr         d
+    rr         e
+    or         a
+    bit         0,e             ; bit 16 of 16
+    jr         z,sq_mul16_noadd
+    add         hl,bc
+sq_mul16_noadd:
+    rr         h
+    rr         l
+    rr         d
+    rr         e
+
+    ex          de,hl
+    ret                          ; product is always >= 0 - no sign
+                                  ; restoration needed here, unlike
+                                  ; l_muls_32_16x16
 
 ;------------------------------------------------------------
 ; Print BCD number

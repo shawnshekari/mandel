@@ -62,6 +62,7 @@ a comparable clock speed.
 | + one-directional palette, reversed (black at far-field, white at boundary, sudden black at interior) | 29.9s | No measurable timing impact - data-table swap only; see PLAN.md for detail |
 | + ESC-key check moved from once per pixel to once per row | 28.8s | ~3.5% faster - `charIn` was dispatching an HBIOS status check ~120x/row for a key that's essentially never there; see PLAN.md for detail |
 | + per-row output buffer (colorpixel/setcolor/printdec append to a buffer, flushLine sends it in one pass) | 28.63s | Flat vs. 28.8s (within noise) - see PLAN.md for why: the `OUTPUT=0` split still shows ~3.1s of output overhead (25.53s compute-only vs 28.63s with output), essentially the same *absolute* overhead as the original pre-optimization `OUTPUT=0` split (~3.3s) - the CPU-side call/register overhead this was meant to remove wasn't the bottleneck; UART transmission time likely is |
+| + dedicated `square_16` routine for `z^2` (2 of 3 multiplies/iteration, plus all 3 cardioid/bulb pre-check squarings) | 27.63s | ~3.5% faster - skips the second operand's sign check/abs-value and the entire sign-restoration exit path, both unnecessary when squaring; verified against `x*x` across all 65536 signed 16-bit values before deploying, see PLAN.md for detail |
 
 # Mandelbrot Set Generator for Z80 (CP/M) - Optimization Readme
 
