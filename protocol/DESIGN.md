@@ -31,6 +31,21 @@ pixel rendering in `pygame` instead of a text-character stand-in.
 - Knows nothing about RGB, pygame, or how the receiver will render
   anything. The sender's only job is emitting correct index/run tokens.
 
+**Scope note for whoever builds the sender side**: the new variant
+(something like `mandel_z80_pixelstream.asm`) should start as a copy of
+the current `mandel_z80.asm` at `main`, not a fresh minimal build. Keep
+every compute-side optimization already in that file (cardioid/bulb
+pre-check, `square_16`, the ESC-per-row relocation) - none of that is
+output-encoding-specific, and none of it should be lost porting to this
+protocol. Only the output path changes: `hsv`, `chartable`,
+`colorpixel`, `setcolor`, and `printdec` all go away, replaced by a
+small streaming RLE encoder in `showpixel`'s place that tracks
+`(last_index, run_count)` across pixels and appends 1-2 byte tokens to a
+much smaller buffer than the ANSI-based design needed (row width + a
+small margin is enough now - see `mandel_pixel_stream.yaml`'s framing
+notes on why worst case is bounded by row width, not a large multiplier
+per pixel).
+
 **Receiver (`rc2014bridge`)**:
 - Decodes the token stream (see `mandel_pixel_stream.yaml`'s
   `encoding` section) back into `(index, run_length)` pairs per row.
@@ -148,9 +163,31 @@ when this mode isn't active.
    all 65536 16-bit values before ever touching hardware) - the Z80
    encoder's output for a real captured row should match
    `generate_test_vectors.py`'s `encode_row()` byte-for-byte.
-4. **Real hardware last**, as the final proof, same standard the rest of
-   this project has held to throughout - not a substitute for the steps
-   above.
+4. **Real hardware, but not via `rc2014_run_command`'s live capture -
+   write to a file and download it instead.** This is a real gap, not a
+   hypothetical: `rc2014_run_command`'s prompt-detection reads from
+   `pyte`'s *rendered* screen (`CPM_PROMPT_RE.search(lines[-1])` in
+   `rc2014bridge/link.py`), and `pyte` will interpret every byte of this
+   binary protocol as terminal input - line-wrapping at 80 columns,
+   rendering high bytes (including this protocol's own `0xF8-0xFF`
+   control range) as Latin-1 printable characters - completely
+   independent of this protocol's actual row/frame structure. A
+   sufficiently long or unlucky byte sequence could render something
+   that looks like a CP/M prompt after `pyte`'s own line-wrapping,
+   silently truncating the capture mid-stream. This is *not* a flaw in
+   the protocol or the production architecture - the real bridge decoder
+   intercepts bytes before they ever reach `pyte`, exactly as designed
+   above - it's specifically that `rc2014_run_command` isn't a safe
+   verification tool for raw binary output until a working bridge
+   decoder exists on the other end to consume it live. Until then: have
+   the test build write its encoded output to a file on the CP/M device
+   instead of streaming it to the console, and use `rc2014_download`
+   (XMODEM, checksum-verified, completely decoupled from prompt-
+   detection heuristics) to retrieve it byte-exact for comparison against
+   the Python reference encoder. Switch to real live-streaming
+   verification only once the bridge side has a working decoder to
+   receive it, per the plan to converge to one agent for that final
+   integration/test pass.
 
 ## File sync between the two repos
 
