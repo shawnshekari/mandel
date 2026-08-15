@@ -26,18 +26,25 @@ numbers and commit history for full detail on each):
 5. ESC-key check moved from once per pixel to once per row (`charIn` was
    being called ~120x/row for a key that's essentially never there) -
    see below. **~3.5% faster: 29.83-29.91s -> 28.8s.**
+6. Per-row output buffer - `colorpixel`/`setcolor`/`printdec` append to
+   `line_buf` instead of calling `printCh` per byte, `flushLine` sends
+   the whole row in one pass. **Measured flat: 28.63s, within noise of
+   28.8s** - see below for why (real result, not a bug).
 
-**In progress:** output buffering. Register-clobber probe (see below)
-confirmed `D`/`H`/`L`/`B` all survive an HBIOS `CIOOUT` call untouched on
-this build, so a per-row output buffer can use a register-resident
-pointer with zero save/restore - see the staged plan below. Stage 1
-(this ESC relocation) is done; stages 2-5 (buffer scaffolding, buffered
-`colorpixel`/`setcolor`/`showpixel`, `flushLine`, final verification) are
-next.
+**Done for now on the output-buffering arc.** The `OUTPUT=0` split shows
+why the buffering didn't move the needle much: ~3.1s of output overhead
+remains (25.53s compute-only vs 28.63s with output), essentially the
+*same absolute* overhead as the very first `OUTPUT=0` split ever measured
+(~3.3s, before any output-path optimization existed) - strong evidence
+the remaining cost is UART transmission time itself, not CPU-side
+call/register overhead. Further CPU-side output optimization is likely
+a dead end; **not** pursuing precision-independent output tricks further
+unless something changes this picture (e.g. a faster baud rate, if the
+hardware/terminal supports it - not investigated).
 
-**After that, not yet decided:** precision reduction (drop `scale` from
-256, shrinking the multiply routine itself) is the main candidate left on
-the table from the original optimization list.
+**Not yet decided:** what to tackle next. Precision reduction (drop
+`scale` from 256, shrinking the multiply routine itself) is the main
+candidate left on the table from the original optimization list.
 
 ### Done: cardioid/period-2-bulb pre-check skips interior pixels entirely
 
@@ -224,6 +231,71 @@ correctly by testing it interactively.
 
 **Measured: 28.8s, down from the 29.83-29.91s cardioid/palette
 baseline - ~3.5% faster.**
+
+### Done: per-row output buffer (real change, ~zero measured win - and a useful negative result)
+
+Continuation of the same idea: `printCh` pays `push bc/de/hl` + an HBIOS
+dispatch on *every single byte*. User's idea - accumulate a row's worth
+of pixel chars and (on-change) color escapes into a buffer, then send it
+in one pass at end-of-row, using the register-clobber probe's finding
+that a buffer pointer needs zero save/restore around `CIOOUT`.
+
+**Design:** `line_buf`/`buf_ptr` (1536 bytes, sized for the worst case at
+the current 120-column width: 7-byte `ansifg` prefix + up to 3 color
+digits + `'m'` + 1 pixel char = 12 bytes/pixel if *every* pixel changed
+color, ×120, +2 for trailing CR/LF). `colorpixel`/`setcolor`/`showpixel`
+each load `buf_ptr` fresh via `ld hl,(buf_ptr)`, append bytes with
+`ld (hl),a`/`inc hl`, store `hl` back before returning - simpler than
+trying to keep a single resident `hl` across the hsv/chartable table
+lookups (which also want `hl` as a pointer), and the two extra memory
+round-trips this costs per pixel are noise next to the per-byte savings.
+`ansifg`'s 7 bytes are fully unrolled as immediate `ld (hl),n`/`inc hl`
+pairs (compile-time constants, cheaper than a copy loop). `printdec`'s
+digit-emission point (`pd3`) swapped from `call printCh` to
+`ld (hl),a`/`inc hl` - the rest of `pd1`-`pd4`'s logic only ever touches
+`a`/`c`/`e`/the stack, never `h`/`l`, so the buffer cursor survives the
+call into it for free. `ansifg`'s DEFB table is now dead code (bytes
+inlined) and was deleted rather than left stale.
+
+`flushLine` sends the buffered row in one pass using a **NUL-terminator
+scan** rather than a byte counter: `inner_loop_end` appends a `0` after
+the trailing CR/LF, and `flushLine` just walks `hl` forward until it
+hits one. This sidesteps a real register-allocation conflict: `CIOOUT`
+needs `b`/`c` as its own inputs (function code/device) every call, so a
+16-bit byte count can't live in `bc` without colliding with them, and
+`d`/`h`/`l` (the registers actually free to hold persistent state) can't
+hold a full 16-bit count either without a second register for the walk
+pointer. A sentinel avoids needing a count register at all - safe here
+specifically because none of the real bytes ever written (`ESC`, digits,
+`;`, `'m'`, pixel chars, CR, LF) are ever legitimately `0`. `b` is loaded
+with `hbios_cioout` once before the loop (confirmed stable across calls);
+`c` is reloaded every iteration (confirmed *not* stable - see the
+register-clobber probe above).
+
+**Verified:** real hardware render visually confirmed correct by the
+user (colors/shape match prior runs) rather than a manual byte-diff -
+decided against hand-transcribing the ~10KB raw ANSI capture for this
+one, since that transcription step is itself a known source of
+introduced errors (see the "manually retyping...is unreliable" lesson
+lower in this file), and a full-render visual confirmation on the actual
+target hardware is this project's own stated standard of proof anyway.
+
+**Measured: 28.63s vs. 28.8s before this change - flat, within noise.**
+Re-ran the `OUTPUT=0`/`OUTPUT=1` split to understand why: 25.53s
+compute-only vs. 28.63s with output, so ~3.1s of output overhead
+remains - essentially the *same absolute* number as the very first
+`OUTPUT=0` split ever measured on this project (~3.3s, back when the
+*total* baseline was 45.09s and none of the output-path work existed
+yet). That's strong evidence the ~3s left over isn't CPU-side
+push/pop/dispatch cost at all (which is exactly what both the ESC
+relocation and this buffering targeted, and both real wins on paper) -
+it's much more likely bounded by the UART's actual transmission time at
+whatever baud rate this board runs, a cost no amount of CPU-side
+buffering can reduce. Keeping the buffering change anyway - it's
+strictly correct, not slower, and structurally simpler at the call sites
+(one buffer append instead of a `printCh` call each) - but not
+worth further investment down this path without first finding a way to
+raise the baud rate or confirming the bottleneck some other way.
 
 ### Tried and reverted: magnitude pre-check before the multiply (negative result)
 

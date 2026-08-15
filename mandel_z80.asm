@@ -278,8 +278,13 @@ iteration_end:
 
         jp      inner_loop
 inner_loop_end:
-        ld	hl, crlfeos
-        call	printSt
+        ld      hl, (buf_ptr)   ; append CR/LF + a NUL terminator (flushLine
+        ld      (hl), cr        ; scans for it - safe since none of the real
+        inc     hl              ; bytes we ever write, ESC/digits/;/m/pixel
+        ld      (hl), lf        ; chars/CR/LF, are ever legitimately 0) and
+        inc     hl              ; flush the whole row in one pass
+        ld      (hl), 0
+        call    flushLine
 
         ld      de, (y_step)
         ld      hl, (y)
@@ -326,23 +331,26 @@ mandel_end_done:
 
         rst     0
 
-; Send the color codes only if the iteration count has changed otherwise just print the pixel character.                
+; Append pixel output to the per-row buffer (buf_ptr/line_buf) instead of
+; calling printCh directly - flushLine sends the whole row in one pass at
+; inner_loop_end. Color codes are still only appended when the iteration
+; count changes; the pixel char is appended on every pixel either way.
 colorpixel:
         ; first lets check to see if the iteration has changed
-        ld      a, (prevItCnt)     ; get the previous iteration count   
+        ld      a, (prevItCnt)     ; get the previous iteration count
         cp      b                  ; compare them (current iteration count is in B)
-        jp      z, showpixel       ; if they were the same skip the color change code 
+        jp      z, showpixel       ; if they were the same skip the color change code
 
         ld      a, b
         ld      (prevItCnt), a     ; They were different so store the new iteration count
-        
+
         ld      c,b                 ; iter count in BC so swap then to little endian
         ld      b,0
         ld      hl, hsv             ; get ANSI color code table
         add     hl, bc              ; Now hl is pointing at the new color
 
-        ld      a, (hl)             ; Put the current color into A
-        call    setcolor
+        ld      a, (hl)             ; Put the current color into A - hl is
+        call    setcolor            ; free again, setcolor loads buf_ptr itself
         ; Fall through to send the pixel char
 
 showpixel:
@@ -358,20 +366,46 @@ showpixel:
         ld      hl, chartable       ; re-sent when it changes) so a plain-text
         add     hl, bc              ; capture with ANSI stripped stays legible
         ld      a, (hl)             ; and diffable without a color terminal
-        call    printCh
+
+        ld      hl, (buf_ptr)       ; append the one char byte and advance
+        ld      (hl), a
+        inc     hl
+        ld      (buf_ptr), hl
         ret
 
+; a = color byte (0-255) on entry. Appends the full ANSI sequence
+; (ansifg's 7 bytes, fully unrolled since they're compile-time constants -
+; cheaper than a copy loop for a fixed 7-byte run) + up to 3 color digits
+; + 'm' to the buffer. Loads buf_ptr itself rather than assuming a live
+; HL from the caller, since colorpixel's hsv lookup uses hl as a table
+; pointer right up until the call.
 setcolor:
-        push    af              ; save accumulator
-        ld      hl, ansifg      ; The first part of the terminal color code
-        call    printSt
-        pop     af              ; restore the acculator
-        
-        call    printdec        ; print ANSI color code
-        ld      a, 'm'          ; The remaining part of the termial code for color
-        call    printCh
+        ld      hl, (buf_ptr)
+        ld      (hl), esc
+        inc     hl
+        ld      (hl), sqBracket
+        inc     hl
+        ld      (hl), '3'
+        inc     hl
+        ld      (hl), '8'
+        inc     hl
+        ld      (hl), ';'
+        inc     hl
+        ld      (hl), '5'
+        inc     hl
+        ld      (hl), ';'
+        inc     hl
+        call    printdec        ; appends up to 3 digit bytes via hl, advancing it
+        ld      (hl), 'm'
+        inc     hl
+        ld      (buf_ptr), hl
         ret
-        
+
+; a = value to print (0-255), hl = buffer write position (from setcolor) -
+; appends decimal digit bytes via (hl)/inc hl instead of printCh, and
+; returns with hl positioned just past the last digit written. pd1-pd4's
+; own logic only ever touches a/c/e/the stack, never h or l, so hl
+; survives untouched as the buffer cursor throughout.
 printdec:
         ld      c,-100          ; print 100s place
         call    pd1
@@ -394,7 +428,8 @@ pd2:
         jr      Z,pd4
 pd3:
         ld      a, e
-        call    printCh
+        ld      (hl), a         ; append the digit and advance the buffer
+        inc     hl              ; cursor instead of calling printCh
 
 pd4:
         pop     af
@@ -716,6 +751,28 @@ printDT:
         call    printCh
         ld      a, lf
         call    printCh
+        ret
+
+; Send the buffered row (line_buf, NUL-terminated by inner_loop_end) to
+; the console in one pass. No push/pop and no EXX needed around the
+; CIOOUT call - a real-hardware probe (see AGENT.md gotchas) confirmed
+; D/H/L and B all survive it untouched, so hl (the walking source
+; pointer) and b (the function code, loaded once below) don't need any
+; protection; only c (device number) gets silently rewritten by the call
+; and must be reloaded every time.
+flushLine:
+        ld      hl, line_buf
+        ld      b, hbios_cioout
+flushLine_top:
+        ld      a, (hl)
+        or      a
+        jp      z, flushLine_done
+        ld      e, a
+        ld      c, hbios_device
+        rst     hbios
+        inc     hl
+        jp      flushLine_top
+flushLine_done:
         ret
 
 ; Print Character
@@ -1073,7 +1130,6 @@ elapsedSt:      DEFM    'Time taken: '
                 DEFB    hbios_EOS
 
 crlfeos:        DEFB    cr, lf, hbios_EOS                              ; Carrage return, line feed, end of string
-ansifg:         DEFB    esc, sqBracket, 51, 56, 59, 53, 59, hbios_EOS  ; Foreground "esc[38;5;"
 cls:            DEFB    esc, sqBracket, 50, 74, hbios_EOS              ; Clear the screen "esc[2J"
         
                 END
