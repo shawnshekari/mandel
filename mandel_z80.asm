@@ -70,6 +70,12 @@ outer_loop:
 
         ld      hl, (x_start)
         ld      (x), hl
+
+        ld      hl, line_buf            ; reset the per-row output buffer -
+        ld      (buf_ptr), hl           ; colorpixel/showpixel append to it
+                                         ; through the row, flushLine sends it
+                                         ; and resets it at inner_loop_end
+
         jp      charIn                  ; ESC check once per row, not once per
                                          ; pixel - charInEnd falls back into
                                          ; inner_loop below either way
@@ -936,6 +942,18 @@ z_0_square_high: DEFW    0
 z_0_square_low:  DEFW    0
 z_1_square_high: DEFW    0
 z_1_square_low:  DEFW    0
+
+; Per-row output buffer - colorpixel/showpixel append pixel chars and (on
+; change only) ANSI color escapes here instead of calling printCh
+; directly; flushLine sends the whole row in one pass at inner_loop_end.
+; Sized for the worst case at the current x_start/x_end/x_step (120
+; columns): 7 bytes ansifg prefix + up to 3 color digits + 'm' + 1 pixel
+; char = 12 bytes/pixel if EVERY pixel changed color, which never
+; actually happens but is the safe bound; 120*12 = 1440, +2 for the
+; trailing CR/LF appended before each flush. Resize this (and re-check
+; the math above) if x_start/x_end/x_step ever change.
+buf_ptr:        DEFW    line_buf
+line_buf:       DEFS    1536
 
 prevItCnt:      DEFB    0     ; To store the previous iteration count
 
